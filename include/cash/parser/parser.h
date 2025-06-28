@@ -1,0 +1,25 @@
+#ifndef CASH_PARSER_PARSER_H_
+#define CASH_PARSER_PARSER_H_
+
+#include <cash/ast.h>
+#include <cash/error.h>
+#include <cash/parser/lexer.h>
+#include <cash/parser/token.h>
+
+struct Parser {
+    struct Lexer lexer;
+    struct Token current_token;
+    struct Token next_token;
+
+    const char* input;
+    struct Program program;
+    bool error;
+};
+
+struct Parser parser_new(const char* input, bool repl_mode);
+void reset_parser(const char* input, struct Parser* parser);
+void free_parser(struct Parser* parser);
+
+bool parse_program(struct Parser* parser);
+
+#endif  // CASH_PARSER_PARSER_H_
