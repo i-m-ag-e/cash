@@ -6,7 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "cash/error.h"
+#include <stdbool.h>
 
 extern bool REPL_MODE;
 
@@ -51,6 +51,7 @@ void add_string_component(struct ShellString *str,
             component.literal = val;
             break;
         default:
+            break;
     }
 
     add_component(str, component);
@@ -75,10 +76,14 @@ void free_string_component(struct StringComponent *component) {
     }
 }
 
-void free_string(struct ShellString *str) {
+void free_shell_string(struct ShellString *str) {
     for (int i = 0; i < str->component_count; ++i)
         free_string_component(&str->components[i]);
     free(str->components);
+}
+
+void free_string(const struct String* string) {
+    free(string->string);
 }
 
 static char *grow_string(char *str, int new_size) {
@@ -141,11 +146,11 @@ struct String to_string(const struct ShellString *string) {
     int total_size = 0;
 
     for (int i = 0; i < string->component_count; ++i) {
-        struct String expanded = expand_component(&string->components[i]);
+        const struct String expanded = expand_component(&string->components[i]);
         // printf("expanded (%d): %.*s\n", expanded.length, expanded.length,
         //        expanded.string);
-        int is_last_comp = i + 1 == string->component_count;
-        int new_alloc_size = total_size + expanded.length + is_last_comp;
+        const int is_last_comp = i + 1 == string->component_count;
+        const int new_alloc_size = total_size + expanded.length + is_last_comp;
         // printf("new alloc size: %d\n", new_alloc_size);
         str = grow_string(str, new_alloc_size);
         // printf("copying at position %d in (%d) \"%.*s\"\n", total_size,

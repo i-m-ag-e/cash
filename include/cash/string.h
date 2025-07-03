@@ -42,7 +42,8 @@ void add_string_component(struct ShellString* str,
                           enum StringComponentType type, const char* value,
                           int length);
 void free_string_component(struct StringComponent* component);
-void free_string(struct ShellString* str);
+void free_shell_string(struct ShellString* str);
+void free_string(const struct String* string);
 
 struct String expand_component(const struct StringComponent* component);
 struct String to_string(const struct ShellString* str);
