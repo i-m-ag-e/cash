@@ -20,4 +20,9 @@
             exit(status);                                                    \
     } while (0)
 
+#define cash_warning(fmt, ...)                                                 \
+    do {                                                                       \
+        fprintf(stderr, YELLOW "cash: " fmt RESET __VA_OPT__(, ) __VA_ARGS__); \
+    } while (0)
+
 #endif

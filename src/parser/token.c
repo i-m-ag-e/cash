@@ -31,6 +31,7 @@ const char* token_type_to_string(enum TokenType type) {
         TO_STRING_TT(TOKEN_ERROR, "<ERROR>");
         TO_STRING_TT(TOKEN_EOF, "<EOF>");
     }
+    return "";
 }
 
 const char* dump_token_type(enum TokenType type) {

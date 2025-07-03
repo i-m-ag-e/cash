@@ -1,6 +1,9 @@
 #include <cash/error.h>
 #include <cash/string.h>
+#include <cash/util.h>
 #include <cash/vm.h>
+#include <pwd.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -10,19 +13,50 @@
 extern bool REPL_MODE;
 extern char *const *environ;
 
+static void update_prompt(struct VM *vm);
+
+static void change_dir(struct VM *vm, struct String name,
+                       const struct Command *command);
+
 static bool is_path(const char *cmd);
 static bool is_executable(const char *path);
 
 static char *find_in_path(const char *cmd);
 
-void run_program(struct Program *program) {
+struct VM make_vm(void) {
+    struct passwd *userpw = getpwuid(getuid());
+    return (struct VM){.current_prompt = make_new_prompt(userpw->pw_name),
+                       .uid = userpw->pw_uid,
+                       .userpw = userpw};
+}
+
+void free_vm(const struct VM *vm) {
+    free(vm->current_prompt);
+}
+
+void run_program(struct VM *vm, const struct Program *program) {
     for (int i = 0; i < program->statement_count; ++i) {
-        run_command(&program->statements[i].command);
+        run_command(vm, &program->statements[i].command);
     }
 }
 
-void run_command(struct Command *command) {
-    struct String command_name = to_string(&command->command_name);
+void run_command(struct VM *vm, struct Command *command) {
+    const struct String command_name = to_string(&command->command_name);
+
+    // use custom implementation of cd
+    if (strncmp(command_name.string, "cd", command_name.length) == 0) {
+        change_dir(vm, command_name, command);
+        free_string(&command_name);
+        return;
+    }
+
+    if (strncmp(command_name.string, "ls", command_name.length) == 0) {
+        struct ShellString color_arg = make_string();
+        add_string_literal(&color_arg, STRING_COMPONENT_LITERAL, "--color=auto",
+                           12, 0);
+        add_argument(&command->arguments, color_arg);
+    }
+
     printf("Name: %s\n", command_name.string);
     char **args =
         malloc((command->arguments.argument_count + 2) * sizeof(*args));
@@ -36,7 +70,7 @@ void run_command(struct Command *command) {
     printf("arg 0: (len %d) %s\n", command_name.length, args[0]);
 
     for (int i = 0; i < command->arguments.argument_count; ++i) {
-        struct String arg = to_string(&command->arguments.arguments[i]);
+        const struct String arg = to_string(&command->arguments.arguments[i]);
         printf("arg %d: (len %d) %s\n", i + 1, arg.length, arg.string);
 
         args[i + 1] = arg.string;
@@ -54,17 +88,18 @@ void run_command(struct Command *command) {
         executable = strndup(command_name.string, command_name.length);
     } else {
         char *res = find_in_path(command_name.string);
-        if (!res) {
+        if (res == NULL) {
             executable = strndup(command_name.string, command_name.length);
         } else {
-            executable = res;
+            executable = strdup(res);
         }
+        free(res);
     }
 
-    pid_t pid = fork();
+    const pid_t pid = fork();
 
     if (pid == 0) {
-        int res = execve(executable, args, environ);
+        const int res = execve(executable, args, environ);
         if (res == -1) {
             cash_perror(EXIT_FAILURE, "execve", "%s", "");
         }
@@ -73,10 +108,41 @@ void run_command(struct Command *command) {
     waitpid(pid, NULL, 0);
 exit_command:
     free(executable);
-    free(command_name.string);
-    for (int i = 0; i < command->arguments.argument_count; ++i) {
+    free_string(&command_name);
+    for (int i = 0; i < command->arguments.argument_count + 1; ++i) {
         free(args[i]);
     }
+    free(args);
+}
+
+static void update_prompt(struct VM *vm) {
+    free(vm->current_prompt);
+    vm->current_prompt = make_new_prompt(vm->userpw->pw_name);
+}
+
+static void change_dir(struct VM *vm, struct String name,
+                       const struct Command *command) {
+    if (command->arguments.argument_count > 1) {
+        cash_error(EXIT_FAILURE,
+                   "cd: too many arguments (one expected, got %d)\n",
+                   command->arguments.argument_count);
+        return;
+    }
+    int result = 0;
+    if (command->arguments.argument_count == 0) {
+        result = chdir(vm->userpw->pw_dir);
+    } else {
+        const struct String arg = to_string(&command->arguments.arguments[0]);
+        result = chdir(arg.string);
+        free_string(&arg);
+    }
+
+    if (result == -1) {
+        cash_perror(EXIT_FAILURE, "cd", "");
+        return;
+    }
+
+    update_prompt(vm);
 }
 
 static bool is_path(const char *cmd) {
@@ -98,7 +164,7 @@ static char *find_in_path(const char *cmd) {
 
     char *dir = strtok(paths, ":");
     while (dir) {
-        size_t len = strlen(dir) + strlen(cmd) + 2;
+        const size_t len = strlen(dir) + strlen(cmd) + 2;
         char *full_path = malloc(len);
         if (!full_path)
             break;

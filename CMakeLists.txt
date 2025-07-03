@@ -4,7 +4,7 @@ project(cash
     LANGUAGES C 
 )
 
-set(CMAKE_C_STANDARD 23)
+set(CMAKE_C_STANDARD 17)
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wextra -Wpedantic")
 set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -ggdb -O0")
 set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O3")
@@ -14,6 +14,7 @@ add_executable(cash
     src/parser/lexer.c
     src/parser/parser.c
     src/vm.c
+    src/util.c
     src/string.c
     src/ast.c
     src/repl.c

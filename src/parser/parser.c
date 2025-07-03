@@ -1,18 +1,18 @@
-#include <cash/ast.h>
 #include <cash/parser/lexer.h>
 #include <cash/parser/parser.h>
 #include <cash/parser/token.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdbool.h>
 
 #include "cash/error.h"
 
 extern bool REPL_MODE;
 
-static bool is_at_end(struct Parser* parser);
-static struct Token peek(struct Parser* parser);
-static enum TokenType peek_tt(struct Parser* parser);
-static struct Token peek_next(struct Parser* parser);
+static bool is_at_end(const struct Parser* parser);
+static struct Token peek(const struct Parser* parser);
+static enum TokenType peek_tt(const struct Parser* parser);
+static struct Token peek_next(const struct Parser* parser);
 static struct Token advance(struct Parser* parser);
 static bool match(enum TokenType type, struct Parser* parser);
 static struct Token consume(enum TokenType type, struct Parser* parser);
@@ -44,7 +44,7 @@ void free_parser(struct Parser* parser) {
 bool parse_program(struct Parser* parser) {
     parser->current_token = lexer_next_token(&parser->lexer);
     parser->next_token = lexer_next_token(&parser->lexer);
-    while (peek(parser).type != TOKEN_EOF) {
+    while (peek_tt(parser) != TOKEN_EOF) {
         if (parser->error) {
             return false;
         }
@@ -68,13 +68,13 @@ static bool skip_line_terminator(struct Parser* parser) {
 }
 
 static bool parse_statement(struct Parser* parser, struct Stmt* stmt) {
-    struct ShellString command_name = consume(TOKEN_WORD, parser).value.word;
+    const struct ShellString command_name = consume(TOKEN_WORD, parser).value.word;
     struct ArgumentList arg_list = make_arg_list();
 
     while (!is_at_end(parser)) {
         if (parser->error)
             return false;
-        struct Token argument = consume(TOKEN_WORD, parser);
+        const struct Token argument = consume(TOKEN_WORD, parser);
         add_argument(&arg_list, argument.value.word);
 
         if (peek_tt(parser) == TOKEN_SEMICOLON ||
@@ -92,19 +92,19 @@ static bool parse_statement(struct Parser* parser, struct Stmt* stmt) {
     return true;
 }
 
-static bool is_at_end(struct Parser* parser) {
+static bool is_at_end(const struct Parser* parser) {
     return parser->current_token.type == TOKEN_EOF;
 }
 
-static struct Token peek(struct Parser* parser) {
+static struct Token peek(const struct Parser* parser) {
     return parser->current_token;
 }
 
-static enum TokenType peek_tt(struct Parser* parser) {
+static enum TokenType peek_tt(const struct Parser* parser) {
     return parser->current_token.type;
 }
 
-static struct Token peek_next(struct Parser* parser) {
+static struct Token peek_next(const struct Parser* parser) {
     return parser->next_token;
 }
 

@@ -17,12 +17,12 @@ void add_argument(struct ArgumentList *list, struct ShellString arg) {
 
 void free_arg_list(struct ArgumentList *list) {
     for (int i = 0; i < list->argument_count; ++i)
-        free_string(&list->arguments[i]);
+        free_shell_string(&list->arguments[i]);
     free(list->arguments);
 }
 
 void free_stmt(struct Stmt *stmt) {
-    free_string(&stmt->command.command_name);
+    free_shell_string(&stmt->command.command_name);
     free_arg_list(&stmt->command.arguments);
 }
 

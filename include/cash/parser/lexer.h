@@ -3,6 +3,7 @@
 
 #include <cash/ast.h>
 #include <cash/parser/token.h>
+#include <stdbool.h>
 
 struct Lexer {
     bool repl_mode;
