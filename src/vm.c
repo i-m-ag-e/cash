@@ -2,6 +2,7 @@
 #include <cash/string.h>
 #include <cash/util.h>
 #include <cash/vm.h>
+#include <linux/limits.h>
 #include <pwd.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -10,42 +11,63 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-extern bool REPL_MODE;
+extern bool repl_mode;
 extern char *const *environ;
 
-static void update_prompt(struct VM *vm);
+static struct String expand_component(const struct Vm *vm,
+                                      const struct StringComponent *component);
+static struct String to_string(const struct Vm *vm,
+                               const struct ShellString *string);
 
-static void change_dir(struct VM *vm, struct String name,
-                       const struct Command *command);
+static void update_prompt(struct Vm *vm);
+
+static void change_dir(struct Vm *vm, const struct Command *command);
 
 static bool is_path(const char *cmd);
 static bool is_executable(const char *path);
 
 static char *find_in_path(const char *cmd);
 
-struct VM make_vm(void) {
+static int tilde_expansion(const struct Vm *vm, const char *source, int len,
+                           char **dest, int *total_size);
+
+struct Vm make_vm(void) {
     struct passwd *userpw = getpwuid(getuid());
-    return (struct VM){.current_prompt = make_new_prompt(userpw->pw_name),
+    char *cwd = get_cwd();
+    setenv("PWD", cwd, 1);
+    setenv("OLDPWD", cwd, 1);
+    return (struct Vm){.current_prompt = make_new_prompt(userpw->pw_name),
+                       .pwd = cwd,
+                       .old_pwd = strdup(cwd),
                        .uid = userpw->pw_uid,
-                       .userpw = userpw};
+                       .userpw = userpw,
+                       .exit = false};
 }
 
-void free_vm(const struct VM *vm) {
+void free_vm(const struct Vm *vm) {
     free(vm->current_prompt);
+    free(vm->old_pwd);
+    free(vm->pwd);
 }
 
-void run_program(struct VM *vm, const struct Program *program) {
+void run_program(struct Vm *vm, const struct Program *program) {
     for (int i = 0; i < program->statement_count; ++i) {
         run_command(vm, &program->statements[i].command);
     }
 }
 
-void run_command(struct VM *vm, struct Command *command) {
-    const struct String command_name = to_string(&command->command_name);
+void run_command(struct Vm *vm, struct Command *command) {
+    const struct String command_name = to_string(vm, &command->command_name);
 
     // use custom implementation of cd
-    if (strncmp(command_name.string, "cd", command_name.length) == 0) {
-        change_dir(vm, command_name, command);
+    if (strcmp(command_name.string, "cd") == 0) {
+        change_dir(vm, command);
+        free_string(&command_name);
+        return;
+    }
+
+    if (strcmp(command_name.string, "exit") == 0) {
+        vm->exit = true;
         free_string(&command_name);
         return;
     }
@@ -61,7 +83,7 @@ void run_command(struct VM *vm, struct Command *command) {
     char **args =
         malloc((command->arguments.argument_count + 2) * sizeof(*args));
     if (!args) {
-        cash_error(EXIT_FAILURE, "could not allocate memory for arguments%s\n",
+        CASH_ERROR(EXIT_FAILURE, "could not allocate memory for arguments%s\n",
                    "");
         exit(EXIT_FAILURE);
     }
@@ -70,7 +92,8 @@ void run_command(struct VM *vm, struct Command *command) {
     printf("arg 0: (len %d) %s\n", command_name.length, args[0]);
 
     for (int i = 0; i < command->arguments.argument_count; ++i) {
-        const struct String arg = to_string(&command->arguments.arguments[i]);
+        const struct String arg =
+            to_string(vm, &command->arguments.arguments[i]);
         printf("arg %d: (len %d) %s\n", i + 1, arg.length, arg.string);
 
         args[i + 1] = arg.string;
@@ -81,7 +104,7 @@ void run_command(struct VM *vm, struct Command *command) {
     char *executable = NULL;
     if (is_path(command_name.string)) {
         if (!is_executable(command_name.string)) {
-            cash_error(EXIT_FAILURE, "the path `%s` is not an executable\n",
+            CASH_ERROR(EXIT_FAILURE, "the path `%s` is not an executable\n",
                        command_name.string);
             goto exit_command;
         }
@@ -101,7 +124,7 @@ void run_command(struct VM *vm, struct Command *command) {
     if (pid == 0) {
         const int res = execve(executable, args, environ);
         if (res == -1) {
-            cash_perror(EXIT_FAILURE, "execve", "%s", "");
+            CASH_PERROR(EXIT_FAILURE, "execve", "%s", "");
         }
     }
 
@@ -115,30 +138,148 @@ exit_command:
     free(args);
 }
 
-static void update_prompt(struct VM *vm) {
+struct String expand_component(const struct Vm *vm,
+                               const struct StringComponent *component) {
+    char *string = NULL;
+
+    switch (component->type) {
+        case STRING_COMPONENT_VAR_SUB: {
+            const char *value = getenv(component->var_substitution);
+            if (value == NULL) {
+                return (struct String){NULL, 0};
+            }
+            return (struct String){.string = strdup(value), (int)strlen(value)};
+        }
+        case STRING_COMPONENT_LITERAL:
+        case STRING_COMPONENT_DQ: {
+            int i, start = 0, total_size = 0;
+
+            if (component->type == STRING_COMPONENT_LITERAL &&
+                component->literal[0] == '~') {
+                start =
+                    tilde_expansion(vm, component->literal, component->length,
+                                    &string, &total_size);
+            }
+
+            for (i = start; i < component->length; ++i) {
+                if (component->literal[i] == '\\') {
+                    if (i + 1 == component->length)
+                        break;
+
+                    const int length = i - start + 1;
+                    string = grow_string(string, total_size + length);
+                    strncpy(&string[total_size], &component->literal[start],
+                            length - 1);
+                    string[total_size + length - 1] = component->literal[i + 1];
+                    total_size += length;
+                    start = i + 2;
+                    i++;
+                }
+            }
+            if (start != i) {
+                const int length = i - start;
+                string = grow_string(string, total_size + length);
+                strncpy(&string[total_size], &component->literal[start],
+                        length);
+                total_size += length;
+            }
+
+            return (struct String){string, total_size};
+        }
+
+        case STRING_COMPONENT_SQ:
+            return (struct String){
+                strndup(component->literal, component->length),
+                component->length};
+
+        default:
+            return (struct String){.string = "", .length = 0};
+    }
+}
+
+// TODO: can make expand_component write directly to a single allocated
+// string, instead of allocating a new one for each compoenent and then
+// freeing it
+struct String to_string(const struct Vm *vm, const struct ShellString *string) {
+    char *str = NULL;
+    int total_size = 0;
+
+    for (int i = 0; i < string->component_count; ++i) {
+        const struct String expanded =
+            expand_component(vm, &string->components[i]);
+        // printf("expanded (%d): %.*s\n", expanded.length, expanded.length,
+        //        expanded.string);
+        const int is_last_comp = i + 1 == string->component_count;
+        const int new_alloc_size = total_size + expanded.length + is_last_comp;
+        // printf("new alloc size: %d\n", new_alloc_size);
+        str = grow_string(str, new_alloc_size);
+        // printf("copying at position %d in (%d) \"%.*s\"\n", total_size,
+        //        total_size, total_size, str);
+        strncpy(&str[total_size], expanded.string, expanded.length);
+        total_size += expanded.length;
+
+        if (is_last_comp) {
+            // printf("setting %d to NULL\n", new_alloc_size);
+            str[new_alloc_size - 1] = '\0';
+        }
+
+        free(expanded.string);
+    }
+    // printf("final str: %s\n", str);
+    // for (int i = 0; i < total_size + 1; ++i) {
+    //     printf("%d: (%d) %c\n", i, str[i], str[i]);
+    // }
+
+    return (struct String){.string = str, .length = total_size};
+}
+
+static void update_prompt(struct Vm *vm) {
     free(vm->current_prompt);
     vm->current_prompt = make_new_prompt(vm->userpw->pw_name);
 }
 
-static void change_dir(struct VM *vm, struct String name,
-                       const struct Command *command) {
+static void change_dir(struct Vm *vm, const struct Command *command) {
     if (command->arguments.argument_count > 1) {
-        cash_error(EXIT_FAILURE,
+        CASH_ERROR(EXIT_FAILURE,
                    "cd: too many arguments (one expected, got %d)\n",
                    command->arguments.argument_count);
         return;
     }
     int result = 0;
+
+    char *old_pwd = vm->old_pwd;
+    vm->old_pwd = vm->pwd;
     if (command->arguments.argument_count == 0) {
         result = chdir(vm->userpw->pw_dir);
+        vm->pwd = strdup(vm->userpw->pw_dir);
     } else {
-        const struct String arg = to_string(&command->arguments.arguments[0]);
-        result = chdir(arg.string);
+        const struct String arg =
+            to_string(vm, &command->arguments.arguments[0]);
+        if (strcmp(arg.string, "-") == 0) {
+            result = chdir(old_pwd);
+            vm->pwd = old_pwd;
+            printf("%s\n", old_pwd);
+            old_pwd = NULL;
+        } else {
+            result = chdir(arg.string);
+
+            char path[PATH_MAX + 1];
+            char *resolved = realpath(".", path);
+            if (!resolved) {
+                CASH_PERROR(EXIT_FAILURE, "realpath", "");
+                exit(EXIT_FAILURE);
+            }
+            vm->pwd = strdup(resolved);
+        }
         free_string(&arg);
     }
 
+    setenv("OLDPWD", vm->old_pwd, 1);
+    setenv("PWD", vm->pwd, 1);
+    free(old_pwd);
+
     if (result == -1) {
-        cash_perror(EXIT_FAILURE, "cd", "");
+        CASH_PERROR(EXIT_FAILURE, "cd", "");
         return;
     }
 
@@ -182,4 +323,38 @@ static char *find_in_path(const char *cmd) {
 
     free(paths);
     return NULL;
+}
+static int tilde_expansion(const struct Vm *vm, const char *source, int len,
+                           char **dest, int *total_size) {
+    int end = 1;
+    while (end < len && source[end] != '/')
+        ++end;
+
+    char *expansion;
+
+    if (end == 1) {
+        expansion = vm->userpw->pw_dir;
+    } else if (end == 2 && (source[1] == '+' || source[1] == '-')) {
+        expansion = source[1] == '+' ? vm->pwd : vm->old_pwd;
+    } else {
+        char *name_copy = strndup_null_terminated(source + 1, end - 1);
+        struct passwd *user = getpwnam(name_copy);
+        if (!user)
+            expansion = NULL;
+        else
+            expansion = user->pw_dir;
+        free(name_copy);
+    }
+
+    if (!expansion) {
+        *total_size += end;
+        *dest = grow_string(*dest, *total_size);
+        strncpy(&(*dest)[*total_size - end], source, end);
+    } else {
+        const int expansion_size = (int)strlen(expansion);
+        *dest = grow_string(*dest, *total_size + expansion_size);
+        strncpy(&(*dest)[*total_size], expansion, expansion_size);
+        *total_size += expansion_size;
+    }
+    return end;
 }

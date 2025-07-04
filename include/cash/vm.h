@@ -1,19 +1,23 @@
-#ifndef CASH_VM_H_
-#define CASH_VM_H_
+#ifndef CASH_VM_H
+#define CASH_VM_H
 
 #include <cash/ast.h>
 #include <pwd.h>
+#include <stdbool.h>
 
-struct VM {
+struct Vm {
     char* current_prompt;
+    char* pwd;
+    char* old_pwd;
     uid_t uid;
     struct passwd* userpw;
+    bool exit;
 };
 
-struct VM make_vm(void);
-void free_vm(const struct VM* vm);
+struct Vm make_vm(void);
+void free_vm(const struct Vm* vm);
 
-void run_program(struct VM* vm, const struct Program* program);
-void run_command(struct VM* vm, struct Command* command);
+void run_program(struct Vm* vm, const struct Program* program);
+void run_command(struct Vm* vm, struct Command* command);
 
-#endif
+#endif  // CASH_VM_H

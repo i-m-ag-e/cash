@@ -1,5 +1,7 @@
-#ifndef CASH_STRING_H_
-#define CASH_STRING_H_
+#ifndef CASH_STRING_H
+#define CASH_STRING_H
+
+struct Program;
 
 enum StringComponentType {
     STRING_COMPONENT_LITERAL,
@@ -41,14 +43,17 @@ void add_string_literal(struct ShellString* str, enum StringComponentType type,
 void add_string_component(struct ShellString* str,
                           enum StringComponentType type, const char* value,
                           int length);
-void free_string_component(struct StringComponent* component);
-void free_shell_string(struct ShellString* str);
+
+char* grow_string(char* str, int new_size);
+void append(struct String* string, const char* value);
+void append_n(struct String* string, const char* value, int length);
+void append_n_terminate(struct String* string, const char* value, int length);
+
+void free_string_component(const struct StringComponent* component);
+void free_shell_string(const struct ShellString* str);
 void free_string(const struct String* string);
 
-struct String expand_component(const struct StringComponent* component);
-struct String to_string(const struct ShellString* str);
-
-void print_string(const struct ShellString* str);
+void print_string(const struct ShellString* string);
 void print_string_component(const struct StringComponent* component);
 
-#endif
+#endif  // CASH_STRING_H

@@ -23,6 +23,7 @@ struct Lexer {
     int token_queue_capacity;
 
     bool continue_string;
+    bool substitution_in_quotes;
     struct ShellString current_string;
 };
 
@@ -30,6 +31,6 @@ struct Lexer lexer_new(const char* input, bool repl_mode);
 struct Token lexer_next_token(struct Lexer* lexer);
 void lexer_lex_full(struct Lexer* lexer);
 void reset_lexer(const char* input, struct Lexer* lexer);
-void free_lexer(struct Lexer* lexer);
+void free_lexer(const struct Lexer* lexer);
 
 #endif  // CASH_PARSER_LEXER_H

@@ -9,16 +9,17 @@
 #include "cash/parser/parser.h"
 #include "cash/vm.h"
 
-bool REPL_MODE = false;
+bool repl_mode = false;
 
 static char* read_file(const char* path);
 static void run_file(const char* path);
 
 int main(const int argc, char* argv[]) {
     if (argc == 1) {
-        REPL_MODE = true;
+        repl_mode = true;
         struct Repl repl = make_repl();
         run_repl(&repl);
+        free_repl(&repl);
     } else {
         run_file(argv[1]);
     }
@@ -27,35 +28,34 @@ int main(const int argc, char* argv[]) {
 static char* read_file(const char* path) {
     FILE* file = fopen(path, "r");
     if (!file) {
-        cash_error(EXIT_FAILURE, "could not read file " BOLD WHITE "%s", path);
+        CASH_ERROR(EXIT_FAILURE, "could not read file " BOLD WHITE "%s", path);
     }
     const int seek_stat = fseek(file, 0L, SEEK_END);
     if (seek_stat != 0) {
-        cash_perror(seek_stat, "fseek",
+        CASH_PERROR(seek_stat, "fseek",
                     "could not seek end of file " BOLD WHITE "%s", path);
     }
 
     const long size = ftell(file);
     if (size == -1L) {
-        cash_perror(size, "ftell",
+        CASH_PERROR(size, "ftell",
                     "could not determine length of file " BOLD WHITE "%s",
                     path);
     }
     rewind(file);
 
     char* buffer = malloc((size_t)size + 1);
-    const size_t read_size =
-        fread((void*)buffer, sizeof(char), (size_t)size, file);
+    const size_t read_size = fread(buffer, sizeof(char), (size_t)size, file);
 
     if (read_size != (size_t)size) {
         if (feof(file))
-            cash_error(EXIT_FAILURE,
+            CASH_ERROR(EXIT_FAILURE,
                        "unexpected end of file while reading " BOLD WHITE "%s",
                        path);
         if (ferror(file))
-            cash_perror(EXIT_FAILURE, "fread",
+            CASH_PERROR(EXIT_FAILURE, "fread",
                         "error while reading file " BOLD WHITE "%s", path);
-        cash_error(EXIT_FAILURE,
+        CASH_ERROR(EXIT_FAILURE,
                    "unknown error while reading file " BOLD WHITE "%s" RED
                    "(return value from fread() != file_size (%zu != %zu))",
                    path, read_size, size);
@@ -67,15 +67,16 @@ static char* read_file(const char* path) {
 static void run_file(const char* path) {
     char* contents = read_file(path);
 
-    struct VM vm = make_vm();
+    struct Vm vm = make_vm();
     struct Parser parser = parser_new(contents, false);
     parse_program(&parser);
-    struct Program prog = parser.program;
+    const struct Program prog = parser.program;
 
     print_program(&prog);
 
     run_program(&vm, &prog);
 
+    free_vm(&vm);
     free_program(&prog);
     free_parser(&parser);
     free(contents);

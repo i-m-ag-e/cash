@@ -1,27 +1,27 @@
 #include <cash/parser/lexer.h>
 #include <cash/parser/parser.h>
 #include <cash/parser/token.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <stdbool.h>
 
 #include "cash/error.h"
 
-extern bool REPL_MODE;
+extern bool repl_mode;
 
 static bool is_at_end(const struct Parser* parser);
 static struct Token peek(const struct Parser* parser);
 static enum TokenType peek_tt(const struct Parser* parser);
-static struct Token peek_next(const struct Parser* parser);
+// static struct Token peek_next(const struct Parser* parser);
 static struct Token advance(struct Parser* parser);
-static bool match(enum TokenType type, struct Parser* parser);
+// static bool match(enum TokenType type, struct Parser* parser);
 static struct Token consume(enum TokenType type, struct Parser* parser);
 
 static bool skip_line_terminator(struct Parser* parser);
 static bool parse_statement(struct Parser* parser, struct Stmt* stmt);
 
 struct Parser parser_new(const char* input, bool repl_mode) {
-    struct Parser parser = {
+    const struct Parser parser = {
         .lexer = lexer_new(input, repl_mode),
         .input = input,
         .program = make_program(),
@@ -37,7 +37,7 @@ void reset_parser(const char* input, struct Parser* parser) {
     parser->program = make_program();
 }
 
-void free_parser(struct Parser* parser) {
+void free_parser(const struct Parser* parser) {
     free_lexer(&parser->lexer);
 }
 
@@ -68,7 +68,8 @@ static bool skip_line_terminator(struct Parser* parser) {
 }
 
 static bool parse_statement(struct Parser* parser, struct Stmt* stmt) {
-    const struct ShellString command_name = consume(TOKEN_WORD, parser).value.word;
+    const struct ShellString command_name =
+        consume(TOKEN_WORD, parser).value.word;
     struct ArgumentList arg_list = make_arg_list();
 
     while (!is_at_end(parser)) {
@@ -104,12 +105,12 @@ static enum TokenType peek_tt(const struct Parser* parser) {
     return parser->current_token.type;
 }
 
-static struct Token peek_next(const struct Parser* parser) {
-    return parser->next_token;
-}
+// static struct Token peek_next(const struct Parser* parser) {
+//     return parser->next_token;
+// }
 
 static struct Token advance(struct Parser* parser) {
-    struct Token curr = parser->current_token;
+    const struct Token curr = parser->current_token;
     if (curr.type == TOKEN_ERROR)
         parser->error = true;
     if (!is_at_end(parser)) {
@@ -120,20 +121,20 @@ static struct Token advance(struct Parser* parser) {
     return parser->current_token;
 }
 
-static bool match(enum TokenType type, struct Parser* parser) {
-    if (peek(parser).type != type) {
-        return false;
-    }
-    advance(parser);
-    return true;
-}
+// static bool match(enum TokenType type, struct Parser* parser) {
+//     if (peek(parser).type != type) {
+//         return false;
+//     }
+//     advance(parser);
+//     return true;
+// }
 
 static struct Token consume(enum TokenType type, struct Parser* parser) {
-    struct Token token = peek(parser);
+    const struct Token token = peek(parser);
     if (token.type == TOKEN_ERROR) {
         parser->error = true;
     } else if (token.type != type) {
-        cash_error(EXIT_FAILURE, "Expected token `%s`, found `%s`\n",
+        CASH_ERROR(EXIT_FAILURE, "Expected token `%s`, found `%s`\n",
                    token_type_to_string(type),
                    token_type_to_string(token.type));
         parser->error = true;
