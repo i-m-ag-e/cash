@@ -10,7 +10,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-extern bool REPL_MODE;
+extern bool repl_mode;
 extern char** environ;
 
 static bool get_line(struct Repl* repl);
@@ -38,13 +38,15 @@ void run_repl(struct Repl* repl) {
 
             run_program(&repl->vm, &program);
             free_program(&program);
+
+            if (repl->vm.exit) {
+                break;
+            }
         }
     }
-
-    free_repl(repl);
 }
 
-void free_repl(struct Repl* repl) {
+void free_repl(const struct Repl* repl) {
     free_parser(&repl->parser);
     clear_history();
     free(repl->line);

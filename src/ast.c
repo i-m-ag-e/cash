@@ -2,9 +2,12 @@
 #include <cash/ast.h>
 #include <cash/colors.h>
 #include <cash/memory.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+extern bool repl_mode;
 
 struct ArgumentList make_arg_list() {
     return (struct ArgumentList){
@@ -12,16 +15,17 @@ struct ArgumentList make_arg_list() {
 }
 
 void add_argument(struct ArgumentList *list, struct ShellString arg) {
-    ADD_LIST(list, argument_count, argument_capacity, arguments, arg);
+    ADD_LIST(list, argument_count, argument_capacity, arguments, arg,
+             struct ShellString);
 }
 
-void free_arg_list(struct ArgumentList *list) {
+void free_arg_list(const struct ArgumentList *list) {
     for (int i = 0; i < list->argument_count; ++i)
         free_shell_string(&list->arguments[i]);
     free(list->arguments);
 }
 
-void free_stmt(struct Stmt *stmt) {
+void free_stmt(const struct Stmt *stmt) {
     free_shell_string(&stmt->command.command_name);
     free_arg_list(&stmt->command.arguments);
 }
@@ -32,10 +36,11 @@ struct Program make_program() {
 }
 
 void add_statement(struct Program *program, struct Stmt stmt) {
-    ADD_LIST(program, statement_count, statement_capacity, statements, stmt);
+    ADD_LIST(program, statement_count, statement_capacity, statements, stmt,
+             struct Stmt);
 }
 
-void free_program(struct Program *program) {
+void free_program(const struct Program *program) {
     for (int i = 0; i < program->statement_count; ++i)
         free_stmt(&program->statements[i]);
     free(program->statements);
@@ -64,9 +69,9 @@ void print_string_component(const struct StringComponent *component) {
     }
 }
 
-void print_string(const struct ShellString *str) {
-    for (int i = 0; i < str->component_count; ++i)
-        print_string_component(&str->components[i]);
+void print_string(const struct ShellString *string) {
+    for (int i = 0; i < string->component_count; ++i)
+        print_string_component(&string->components[i]);
 }
 
 void print_program(const struct Program *program) {

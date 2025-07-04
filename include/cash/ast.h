@@ -18,7 +18,7 @@ struct ArgumentList {
 };
 struct ArgumentList make_arg_list();
 void add_argument(struct ArgumentList* list, struct ShellString arg);
-void free_arg_list(struct ArgumentList* list);
+void free_arg_list(const struct ArgumentList* list);
 
 struct Command {
     struct ShellString command_name;
@@ -28,7 +28,7 @@ struct Command {
 struct Stmt {
     struct Command command;
 };
-void free_stmt(struct Stmt* stmt);
+void free_stmt(const struct Stmt* stmt);
 
 struct Program {
     struct Stmt* statements;
@@ -37,7 +37,7 @@ struct Program {
 };
 struct Program make_program();
 void add_statement(struct Program* program, struct Stmt stmt);
-void free_program(struct Program* program);
+void free_program(const struct Program* program);
 
 void print_program(const struct Program* program);
 void print_statement(const struct Stmt* stmt);
