@@ -27,13 +27,13 @@ void run_repl(struct Repl* repl) {
         }
 
         reset_parser(repl->line, &repl->parser);
-        lexer_lex_full(&repl->parser.lexer);
+        lexer_lex_full(repl->parser.lexer);
 
         const bool success = parse_program(&repl->parser);
 
         struct Program program = repl->parser.program;
         if (success) {
-            print_program(&program);
+            print_program(&program, 0);
             printf("\n");
 
             run_program(&repl->vm, &program);

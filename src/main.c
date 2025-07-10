@@ -72,7 +72,7 @@ static void run_file(const char* path) {
     parse_program(&parser);
     const struct Program prog = parser.program;
 
-    print_program(&prog);
+    print_program(&prog, 0);
 
     run_program(&vm, &prog);
 

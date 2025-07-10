@@ -6,13 +6,14 @@
 #include <cash/parser/token.h>
 
 struct Parser {
-    struct Lexer lexer;
+    struct Lexer* lexer;
     struct Token current_token;
     struct Token next_token;
 
     const char* input;
     struct Program program;
     bool error;
+    bool is_subparser;
 };
 
 struct Parser parser_new(const char* input, bool repl_mode);

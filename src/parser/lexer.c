@@ -43,8 +43,9 @@ static const bool kPunctuation[128] = {
     ['$'] = true,  ['\t'] = true, ['\n'] = true, [' '] = true};
 // ">|<()'\";&`$\t\n"
 
-struct Lexer lexer_new(const char* input, bool repl_mode) {
-    return (struct Lexer){
+struct Lexer* lexer_new(const char* input, bool repl_mode) {
+    struct Lexer* lexer = malloc(sizeof(struct Lexer));
+    *lexer = (struct Lexer){
         .repl_mode = repl_mode,
         .error = false,
         .input = input,
@@ -64,6 +65,7 @@ struct Lexer lexer_new(const char* input, bool repl_mode) {
         .substitution_in_quotes = false,
         .continue_string = false,
     };
+    return lexer;
 }
 
 void reset_lexer(const char* input, struct Lexer* lexer) {
@@ -119,16 +121,16 @@ static struct Token lexer_lex(struct Lexer* lexer) {
     switch (peek(lexer)) {
         CHAR('(', TOKEN_LPAREN);
         CHAR(')', TOKEN_RPAREN);
-        CHAR('|', TOKEN_PIPE);
         CHAR(';', TOKEN_SEMICOLON);
-        case '[':
+        CHAR('!', TOKEN_NOT);
+        case '&':
             advance(lexer);
-            return match(lexer, '[') ? make_token(TOKEN_DOUBLE_LSQUARE, lexer)
-                                     : make_token(TOKEN_LSQUARE, lexer);
-        case ']':
+            return match(lexer, '&') ? make_token(TOKEN_AND, lexer)
+                                     : make_token(TOKEN_AMP, lexer);
+        case '|':
             advance(lexer);
-            return match(lexer, ']') ? make_token(TOKEN_DOUBLE_RSQUARE, lexer)
-                                     : make_token(TOKEN_LSQUARE, lexer);
+            return match(lexer, '|') ? make_token(TOKEN_OR, lexer)
+                                     : make_token(TOKEN_PIPE, lexer);
         case '\n':
             return consume_lines(lexer);
         default:
@@ -331,6 +333,14 @@ static void consume_sq_string(struct Lexer* lexer) {
 
 static void consume_substitution(struct Lexer* lexer) {
     advance(lexer);  // '$'
+
+    if (peek(lexer) == '?') {
+        add_string_component(&lexer->current_string, STRING_COMPONENT_VAR_SUB,
+                             "?", 1);
+        advance(lexer);
+        return;
+    }
+
     const int name_start = lexer->position;
     while (!is_at_end(lexer)) {
         const char c = peek(lexer);

@@ -12,12 +12,13 @@ struct Vm {
     uid_t uid;
     struct passwd* userpw;
     bool exit;
+    int previous_exit_code;
 };
 
 struct Vm make_vm(void);
 void free_vm(const struct Vm* vm);
 
-void run_program(struct Vm* vm, const struct Program* program);
-void run_command(struct Vm* vm, struct Command* command);
+int run_program(struct Vm* vm, const struct Program* program);
+int run_command(struct Vm* vm, struct Command* command);
 
 #endif  // CASH_VM_H
