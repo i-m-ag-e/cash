@@ -7,6 +7,19 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define INDENT "    "
+
+static const char *kIndents[] = {
+    "",
+    INDENT,
+    INDENT INDENT,
+    INDENT INDENT INDENT,
+    INDENT INDENT INDENT INDENT,
+    INDENT INDENT INDENT INDENT INDENT,
+    INDENT INDENT INDENT INDENT INDENT INDENT,
+    INDENT INDENT INDENT INDENT INDENT INDENT INDENT,
+};
+
 extern bool repl_mode;
 
 struct ArgumentList make_arg_list() {
@@ -25,9 +38,35 @@ void free_arg_list(const struct ArgumentList *list) {
     free(list->arguments);
 }
 
+void free_expr(const struct Expr *expr) {
+    switch (expr->type) {
+        case EXPR_COMMAND:
+            free_shell_string(&expr->command.command_name);
+            free_arg_list(&expr->command.arguments);
+            break;
+
+        case EXPR_SUBSHELL:
+            free_program(expr->subshell);
+            break;
+
+        case EXPR_PIPELINE:
+        case EXPR_AND:
+        case EXPR_OR:
+            free_expr(expr->binary.left);
+            free_expr(expr->binary.right);
+            free(expr->binary.left);
+            free(expr->binary.right);
+            break;
+
+        case EXPR_NOT:
+            free_expr(expr->binary.left);
+            free(expr->binary.left);
+            break;
+    }
+}
+
 void free_stmt(const struct Stmt *stmt) {
-    free_shell_string(&stmt->command.command_name);
-    free_arg_list(&stmt->command.arguments);
+    free_expr(&stmt->expr);
 }
 
 struct Program make_program() {
@@ -74,19 +113,53 @@ void print_string(const struct ShellString *string) {
         print_string_component(&string->components[i]);
 }
 
-void print_program(const struct Program *program) {
+void print_program(const struct Program *program, int indent) {
     printf("Program([<len: %d>\n", program->statement_count);
     for (int i = 0; i < program->statement_count; ++i) {
-        printf("    ");
-        print_statement(&program->statements[i]);
+        printf("%s", kIndents[indent + 1]);
+        print_statement(&program->statements[i], indent + 1);
         printf("\n");
     }
-    printf("])");
+    printf("%s])", kIndents[indent]);
 }
 
-void print_statement(const struct Stmt *stmt) {
+void print_expr(const struct Expr *expr, int indent) {
+    switch (expr->type) {
+        case EXPR_SUBSHELL:
+            printf("Subshell( ");
+            print_program(expr->subshell, indent + 1);
+            printf(" )");
+            break;
+
+        case EXPR_PIPELINE:
+        case EXPR_AND:
+        case EXPR_OR:
+            printf("Binary( %s\n%s",
+                   expr->type == EXPR_PIPELINE ? "|"
+                   : expr->type == EXPR_AND    ? "&&"
+                                               : "||",
+                   kIndents[indent + 1]);
+            print_expr(expr->binary.left, indent + 1);
+            printf(",\n%s", kIndents[indent + 1]);
+            print_expr(expr->binary.right, indent + 1);
+            printf(" )");
+            break;
+
+        case EXPR_NOT:
+            printf("Not( ");
+            print_expr(expr->binary.left, indent + 1);
+            printf(" )");
+            break;
+
+        case EXPR_COMMAND:
+            print_command(&expr->command);
+            break;
+    }
+}
+
+void print_statement(const struct Stmt *stmt, int indent) {
     printf("Stmt( ");
-    print_command(&stmt->command);
+    print_expr(&stmt->expr, indent);
     printf(" )");
 }
 

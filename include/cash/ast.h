@@ -3,14 +3,6 @@
 
 #include <cash/string.h>
 
-enum AstNodeType {
-    AST_PROGRAM,
-    AST_STATEMENT,
-    AST_COMMAND,
-    AST_PIPELINE,
-    // AST_SUBSTITUTION,
-};
-
 struct ArgumentList {
     struct ShellString* arguments;
     int argument_count;
@@ -25,8 +17,31 @@ struct Command {
     struct ArgumentList arguments;
 };
 
+enum ExprType {
+    EXPR_SUBSHELL,
+    EXPR_PIPELINE,
+    EXPR_NOT,
+    EXPR_AND,
+    EXPR_OR,
+
+    EXPR_COMMAND,
+};
+
+struct Expr {
+    enum ExprType type;
+    union {
+        struct Program* subshell;  // EXPR_SUBSHELL
+        struct Command command;    // EXPR_COMMAND
+        struct {
+            struct Expr* left;
+            struct Expr* right;
+        } binary;
+    };
+};
+void free_expr(const struct Expr* expr);
+
 struct Stmt {
-    struct Command command;
+    struct Expr expr;
 };
 void free_stmt(const struct Stmt* stmt);
 
@@ -39,8 +54,9 @@ struct Program make_program();
 void add_statement(struct Program* program, struct Stmt stmt);
 void free_program(const struct Program* program);
 
-void print_program(const struct Program* program);
-void print_statement(const struct Stmt* stmt);
+void print_program(const struct Program* program, int indent);
+void print_statement(const struct Stmt* stmt, int indent);
+void print_expr(const struct Expr* expr, int indent);
 void print_command(const struct Command* command);
 
 #endif  // CASH_AST_H

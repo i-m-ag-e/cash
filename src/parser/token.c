@@ -18,12 +18,14 @@ const char* token_type_to_string(enum TokenType type) {
         TO_STRING_TT(TOKEN_NUMBER, "<number>");
         TO_STRING_TT(TOKEN_LINE_BREAK, "\\n");
         TO_STRING_TT(TOKEN_SEMICOLON, ";");
+
+        TO_STRING_TT(TOKEN_AMP, "&");
+        TO_STRING_TT(TOKEN_AND, "&&");
+        TO_STRING_TT(TOKEN_OR, "||");
+        TO_STRING_TT(TOKEN_NOT, "!");
+
         TO_STRING_TT(TOKEN_LPAREN, "(");
         TO_STRING_TT(TOKEN_RPAREN, ")");
-        TO_STRING_TT(TOKEN_LSQUARE, "[");
-        TO_STRING_TT(TOKEN_RSQUARE, "]");
-        TO_STRING_TT(TOKEN_DOUBLE_LSQUARE, "[[");
-        TO_STRING_TT(TOKEN_DOUBLE_RSQUARE, "]]");
         TO_STRING_TT(TOKEN_PIPE, "|");
         TO_STRING_TT(TOKEN_REDIRECT_IN, "<");
         TO_STRING_TT(TOKEN_REDIRECT_OUT, ">");
@@ -44,10 +46,11 @@ const char* dump_token_type(enum TokenType type) {
         CASE_TT(TOKEN_LPAREN);
         CASE_TT(TOKEN_RPAREN);
 
-        CASE_TT(TOKEN_LSQUARE);
-        CASE_TT(TOKEN_DOUBLE_LSQUARE);
-        CASE_TT(TOKEN_RSQUARE);
-        CASE_TT(TOKEN_DOUBLE_RSQUARE);
+        CASE_TT(TOKEN_AMP);
+
+        CASE_TT(TOKEN_AND);
+        CASE_TT(TOKEN_OR);
+        CASE_TT(TOKEN_NOT);
 
         CASE_TT(TOKEN_PIPE);
         CASE_TT(TOKEN_REDIRECT_IN);

@@ -1,4 +1,6 @@
+#include <assert.h>
 #include <cash/error.h>
+#include <cash/memory.h>
 #include <cash/string.h>
 #include <cash/util.h>
 #include <cash/vm.h>
@@ -11,8 +13,41 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#define CHECK_ALLOC(ptr)                                                  \
+    do {                                                                  \
+        if (!(ptr)) {                                                     \
+            CASH_ERROR(EXIT_FAILURE, "Memory allocation failed%s\n", ""); \
+            exit(EXIT_FAILURE);                                           \
+        }                                                                 \
+    } while (0)
+
 extern bool repl_mode;
 extern char *const *environ;
+
+struct RawCommand {
+    char *name;
+    char **args;
+    int args_count;
+};
+static void free_raw_command(const struct RawCommand *raw_command);
+
+struct Pipeline {
+    struct RawCommand *commands;
+    int command_count;
+    int command_capacity;
+};
+static int flatten_pipeline(const struct Vm *vm, const struct Expr *expr,
+                            struct Pipeline *pipeline);
+static void free_pipeline(const struct Pipeline *pipeline);
+
+static int spawn_process(int in, int out, const char *name, char *const *args);
+
+static int get_final_command(const struct Vm *vm, const struct Command *command,
+                             struct RawCommand *raw_command);
+
+static int exec_expression(struct Vm *vm, struct Expr *expr);
+static int run_subshell(struct Vm *vm, struct Program *program);
+static int exec_pipeline(struct Vm *vm, struct Pipeline *pipeline);
 
 static struct String expand_component(const struct Vm *vm,
                                       const struct StringComponent *component);
@@ -41,7 +76,8 @@ struct Vm make_vm(void) {
                        .old_pwd = strdup(cwd),
                        .uid = userpw->pw_uid,
                        .userpw = userpw,
-                       .exit = false};
+                       .exit = false,
+                       .previous_exit_code = 0};
 }
 
 void free_vm(const struct Vm *vm) {
@@ -50,34 +86,62 @@ void free_vm(const struct Vm *vm) {
     free(vm->pwd);
 }
 
-void run_program(struct Vm *vm, const struct Program *program) {
-    for (int i = 0; i < program->statement_count; ++i) {
-        run_command(vm, &program->statements[i].command);
+static void free_raw_command(const struct RawCommand *raw_command) {
+    free(raw_command->name);
+    for (int i = 0; i < raw_command->args_count; ++i) {
+        free(raw_command->args[i]);
     }
+    free(raw_command->args);
 }
 
-void run_command(struct Vm *vm, struct Command *command) {
+static void free_pipeline(const struct Pipeline *pipeline) {
+    for (int i = 0; i < pipeline->command_count; ++i) {
+        free_raw_command(&pipeline->commands[i]);
+    }
+    free(pipeline->commands);
+}
+
+int run_program(struct Vm *vm, const struct Program *program) {
+    for (int i = 0; i < program->statement_count; ++i) {
+        exec_expression(vm, &program->statements[i].expr);
+        // run_command(vm, &program->statements[i].command);
+    }
+    return vm->previous_exit_code;
+}
+
+static int spawn_process(int in, int out, const char *name, char *const *args) {
+    printf("Spawing command: %s ", name);
+    for (int i = 0; args[i] != NULL; ++i) {
+        printf("%s ", args[i]);
+    }
+    printf("\n");
+    const pid_t pid = fork();
+    if (pid < 0) {
+        CASH_PERROR(EXIT_FAILURE, "fork", "could not fork process %s", name);
+        return -1;
+    }
+
+    if (pid == 0) {
+        if (in != STDIN_FILENO) {
+            dup2(in, STDIN_FILENO);
+            close(in);
+        }
+        if (out != STDOUT_FILENO) {
+            dup2(out, STDOUT_FILENO);
+            close(out);
+        }
+        const int res = execve(name, args, environ);
+        if (res == -1) {
+            CASH_PERROR(EXIT_FAILURE, "execvp", "could not execute %s", name);
+        }
+    }
+
+    return pid;
+}
+
+static int get_final_command(const struct Vm *vm, const struct Command *command,
+                             struct RawCommand *raw_command) {
     const struct String command_name = to_string(vm, &command->command_name);
-
-    // use custom implementation of cd
-    if (strcmp(command_name.string, "cd") == 0) {
-        change_dir(vm, command);
-        free_string(&command_name);
-        return;
-    }
-
-    if (strcmp(command_name.string, "exit") == 0) {
-        vm->exit = true;
-        free_string(&command_name);
-        return;
-    }
-
-    if (strncmp(command_name.string, "ls", command_name.length) == 0) {
-        struct ShellString color_arg = make_string();
-        add_string_literal(&color_arg, STRING_COMPONENT_LITERAL, "--color=auto",
-                           12, 0);
-        add_argument(&command->arguments, color_arg);
-    }
 
     printf("Name: %s\n", command_name.string);
     char **args =
@@ -106,7 +170,8 @@ void run_command(struct Vm *vm, struct Command *command) {
         if (!is_executable(command_name.string)) {
             CASH_ERROR(EXIT_FAILURE, "the path `%s` is not an executable\n",
                        command_name.string);
-            goto exit_command;
+            free_string(&command_name);
+            return EXIT_FAILURE;
         }
         executable = strndup(command_name.string, command_name.length);
     } else {
@@ -114,28 +179,186 @@ void run_command(struct Vm *vm, struct Command *command) {
         if (res == NULL) {
             executable = strndup(command_name.string, command_name.length);
         } else {
-            executable = strdup(res);
+            executable = res;
         }
-        free(res);
     }
 
+    *raw_command = (struct RawCommand){
+        .name = executable,
+        .args = args,
+        .args_count = command->arguments.argument_count + 1};
+
+    free_string(&command_name);
+    return 0;
+}
+
+int run_command(struct Vm *vm, struct Command *command) {
+    int status;
+    struct RawCommand raw_command;
+    const int command_expansion = get_final_command(vm, command, &raw_command);
+    if (command_expansion != 0) {
+        free_raw_command(&raw_command);
+        return command_expansion;
+    }
+
+    // use custom implementation of cd and exit
+    if (strcmp(raw_command.name, "cd") == 0) {
+        change_dir(vm, command);
+        free_raw_command(&raw_command);
+        return 0;
+    }
+
+    if (strcmp(raw_command.name, "exit") == 0) {
+        vm->exit = true;
+        free_raw_command(&raw_command);
+        return 0;
+    }
+
+    // ls is changed to /usr/bin/ls, so need to check the original name entered
+    // by user temporary workaround, won't be needed when word splitting is
+    // added
+    const struct String command_name = to_string(vm, &command->command_name);
+    if (strcmp(command_name.string, "ls") == 0) {
+        char *color_arg = malloc((strlen("--color=auto") + 1) * sizeof(char));
+        CHECK_ALLOC(color_arg);
+        strcpy(color_arg, "--color=auto");
+
+        char **new_args = realloc(
+            raw_command.args, (raw_command.args_count + 2) * sizeof(char *));
+        CHECK_ALLOC(new_args);
+        new_args[raw_command.args_count] = color_arg;
+        new_args[raw_command.args_count + 1] = NULL;
+        raw_command.args_count++;
+        raw_command.args = new_args;
+    }
+    free_string(&command_name);
+
+    const pid_t pid = spawn_process(STDIN_FILENO, STDOUT_FILENO,
+                                    raw_command.name, raw_command.args);
+
+    waitpid(pid, &status, 0);
+    free_raw_command(&raw_command);
+
+    vm->previous_exit_code = status % 0xFF;
+    return status;
+}
+
+static int exec_expression(struct Vm *vm, struct Expr *expr) {
+    switch (expr->type) {
+        case EXPR_COMMAND:
+            return run_command(vm, &expr->command);
+
+        case EXPR_SUBSHELL:
+            return run_subshell(vm, expr->subshell);
+
+        case EXPR_NOT: {
+            if (exec_expression(vm, expr->binary.left) == 0) {
+                vm->previous_exit_code = 1;
+                return 1;
+            }
+            vm->previous_exit_code = 0;
+            return 0;
+        }
+
+        case EXPR_AND:
+        case EXPR_OR: {
+            const int left = exec_expression(vm, expr->binary.left);
+            if ((left == 0 && expr->type == EXPR_AND) ||
+                (left != 0 && expr->type == EXPR_OR)) {
+                vm->previous_exit_code =
+                    exec_expression(vm, expr->binary.right);
+                return vm->previous_exit_code;
+            } else {
+                vm->previous_exit_code = left;
+                return left;
+            }
+        }
+
+        case EXPR_PIPELINE: {
+            struct Pipeline pipeline = {NULL, 0, 0};
+            int res = flatten_pipeline(vm, expr, &pipeline);
+            for (int i = 0; i < pipeline.command_count; ++i) {
+                struct RawCommand raw_command = pipeline.commands[i];
+                printf("Command %d:\n\tName: %s\n", i, raw_command.name);
+                for (int j = 0; j < raw_command.args_count; ++j) {
+                    printf("\tArg %d: %s\n", j, raw_command.args[j]);
+                }
+            }
+            printf("res: %d\n", res);
+            if (res == 0)
+                res = exec_pipeline(vm, &pipeline);
+            free_pipeline(&pipeline);
+            return res;
+        }
+
+        default:
+            CASH_ERROR(EXIT_FAILURE, "unimplemented%s", "");
+            exit(EXIT_FAILURE);
+    }
+}
+
+static int run_subshell(struct Vm *vm, struct Program *program) {
+    printf(GREEN "Entering subshell\n" RESET);
     const pid_t pid = fork();
 
     if (pid == 0) {
-        const int res = execve(executable, args, environ);
-        if (res == -1) {
-            CASH_PERROR(EXIT_FAILURE, "execve", "%s", "");
-        }
+        int status = run_program(vm, program);
+        exit(status);
     }
 
-    waitpid(pid, NULL, 0);
-exit_command:
-    free(executable);
-    free_string(&command_name);
-    for (int i = 0; i < command->arguments.argument_count + 1; ++i) {
-        free(args[i]);
+    int status;
+    waitpid(pid, &status, 0);
+    printf(GREEN "Exiting subshell\n" RESET);
+    return status;
+}
+
+static int flatten_pipeline(const struct Vm *vm, const struct Expr *expr,
+                            struct Pipeline *pipeline) {
+    struct RawCommand placeholder = {NULL, NULL, 0};
+    if (expr->binary.left->type == EXPR_PIPELINE) {
+        const int res = flatten_pipeline(vm, expr->binary.left, pipeline);
+        if (res != 0)
+            return res;
+    } else {
+        assert(expr->binary.left->type == EXPR_COMMAND);
+        ADD_LIST(pipeline, command_count, command_capacity, commands,
+                 placeholder, struct RawCommand);
+        get_final_command(vm, &expr->binary.left->command,
+                          &pipeline->commands[pipeline->command_count - 1]);
     }
-    free(args);
+
+    assert(expr->binary.right->type == EXPR_COMMAND);
+
+    ADD_LIST(pipeline, command_count, command_capacity, commands, placeholder,
+             struct RawCommand);
+    get_final_command(vm, &expr->binary.right->command,
+                      &pipeline->commands[pipeline->command_count - 1]);
+    return 0;
+}
+
+static int exec_pipeline(struct Vm *vm, struct Pipeline *pipeline) {
+    int pipefd[2];
+    int in = STDIN_FILENO, i;
+    pid_t *pids = malloc(pipeline->command_count * sizeof(pid_t));
+    int status;
+    for (i = 0; i < pipeline->command_count - 1; ++i) {
+        const struct RawCommand *cmd = &pipeline->commands[i];
+        pipe(pipefd);
+        pids[i] = spawn_process(in, pipefd[1], cmd->name, cmd->args);
+
+        close(pipefd[1]);
+        in = pipefd[0];
+    }
+
+    pids[i] = spawn_process(in, STDOUT_FILENO, pipeline->commands[i].name,
+                            pipeline->commands[i].args);
+    waitpid(pids[i], &status, 0);
+
+    for (i = 0; i < pipeline->command_count - 1; ++i) {
+        waitpid(pids[i], NULL, 0);
+    }
+    free(pids);
+    return status;
 }
 
 struct String expand_component(const struct Vm *vm,
@@ -144,11 +367,25 @@ struct String expand_component(const struct Vm *vm,
 
     switch (component->type) {
         case STRING_COMPONENT_VAR_SUB: {
+            if (component->length == 1 &&
+                component->var_substitution[0] == '?') {
+                const int length =
+                    snprintf(NULL, 0, "%d", vm->previous_exit_code);
+                char *buf = malloc((length + 1) * sizeof(char));
+                if (!buf) {
+                    CASH_ERROR(EXIT_FAILURE, "Memory allocation failed%s\n",
+                               "");
+                    exit(EXIT_FAILURE);
+                }
+                snprintf(buf, length + 1, "%d", vm->previous_exit_code);
+                return (struct String){.string = buf, .length = length};
+            }
             const char *value = getenv(component->var_substitution);
             if (value == NULL) {
                 return (struct String){NULL, 0};
             }
-            return (struct String){.string = strdup(value), (int)strlen(value)};
+            return (struct String){.string = strdup(value),
+                                   .length = (int)strlen(value)};
         }
         case STRING_COMPONENT_LITERAL:
         case STRING_COMPONENT_DQ: {

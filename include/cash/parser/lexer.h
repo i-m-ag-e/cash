@@ -27,7 +27,7 @@ struct Lexer {
     struct ShellString current_string;
 };
 
-struct Lexer lexer_new(const char* input, bool repl_mode);
+struct Lexer* lexer_new(const char* input, bool repl_mode);
 struct Token lexer_next_token(struct Lexer* lexer);
 void lexer_lex_full(struct Lexer* lexer);
 void reset_lexer(const char* input, struct Lexer* lexer);
