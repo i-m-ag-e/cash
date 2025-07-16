@@ -6,6 +6,7 @@
 #include <stdlib.h>
 
 #include "cash/error.h"
+#include "cash/memory.h"
 
 #define ALLOC_CHECKED(ptr, size)                                          \
     do {                                                                  \
@@ -40,6 +41,8 @@ static bool parse_subshell(struct Parser* parser, struct Expr* expr);
 static bool parse_terminal(struct Parser* parser, struct Expr* expr);
 static bool parse_not_expr(struct Parser* parser, struct Expr* expr);
 static bool parse_pipeline(struct Parser* parser, struct Expr* expr);
+static bool handle_redirection(struct Parser* parser, struct Command* command,
+                               struct Token redir);
 static bool parse_command(struct Parser* parser, struct Expr* expr);
 static bool parse_expr(struct Parser* parser, struct Expr* expr);
 
@@ -201,35 +204,78 @@ static bool parse_subshell(struct Parser* parser, struct Expr* expr) {
 }
 
 static bool parse_command(struct Parser* parser, struct Expr* expr) {
-    const struct ShellString command_name =
-        consume(TOKEN_WORD, parser).value.word;
-    struct ArgumentList arg_list = make_arg_list();
+    struct Command command = {.command_name = {.components = NULL,
+                                               .component_count = 0,
+                                               .component_capacity = 0},
+                              .arguments = make_arg_list(),
+                              .redirection_capacity = 0,
+                              .redirection_count = 0,
+                              .redirections = NULL};
+    bool break_out = false;
 
-    while (!is_at_end(parser)) {
+    while (!is_at_end(parser) && !break_out) {
+        printf("Whooo\n");
         if (parser->error)
             return false;
 
         const enum TokenType next = peek_tt(parser);
-        if (next == TOKEN_RPAREN) {
-            if (parser->is_subparser)
+        switch (next) {
+            case TOKEN_WORD: {
+                if (command.command_name.component_count == 0) {
+                    command.command_name = advance(parser).value.word;
+                } else {
+                    const struct Token argument = advance(parser);
+                    add_argument(&command.arguments, argument.value.word);
+                }
                 break;
-            continue;
+            }
+            case TOKEN_RPAREN:
+                if (parser->is_subparser)
+                    break_out = true;
+                continue;
+
+            case TOKEN_PIPE:
+            case TOKEN_AND:
+            case TOKEN_OR:
+            case TOKEN_SEMICOLON:
+            case TOKEN_LINE_BREAK:
+                break_out = true;
+                break;
+
+            case TOKEN_REDIRECT:
+                handle_redirection(parser, &command, advance(parser));
+                break;
+
+            default:
+                CASH_ERROR(EXIT_FAILURE, "IMPOSSIBLE");
+                exit(EXIT_FAILURE);
         }
-
-        if (next == TOKEN_PIPE || next == TOKEN_AND || next == TOKEN_OR ||
-            next == TOKEN_SEMICOLON || next == TOKEN_LINE_BREAK)
-            break;
-
-        const struct Token argument = consume(TOKEN_WORD, parser);
-        add_argument(&arg_list, argument.value.word);
     }
 
     if (parser->error)
         return false;
 
-    *expr = (struct Expr){
-        .type = EXPR_COMMAND,
-        .command = {.command_name = command_name, .arguments = arg_list}};
+    *expr = (struct Expr){.type = EXPR_COMMAND, .command = command};
+    return true;
+}
+
+static bool handle_redirection(struct Parser* parser, struct Command* command,
+                               struct Token redir) {
+    struct Redirection redirection = {
+        .type = redir.value.redirection.type,
+        .left = redir.value.redirection.left,
+        .right = redir.value.redirection.right,
+        .file_name = {
+            .components = NULL, .component_count = 0, .component_capacity = 0}};
+
+    if (redirection.right == -1) {
+        redirection.file_name = consume(TOKEN_WORD, parser).value.word;
+        if (parser->error)
+            return false;
+    }
+
+    ADD_LIST(command, redirection_count, redirection_capacity, redirections,
+             redirection, struct Redirection);
     return true;
 }
 

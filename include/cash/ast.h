@@ -3,6 +3,23 @@
 
 #include <cash/string.h>
 
+enum RedirectionType {
+    REDIRECT_IN,
+    REDIRECT_OUT,
+    REDIRECT_INOUT,
+    REDIRECT_OUTERR,
+    REDIRECT_APPEND_OUT,
+    REDIRECT_APPEND_OUTERR,
+    REDIRECT_OUT_DUPLICATE
+};
+
+struct Redirection {
+    enum RedirectionType type;
+    int left;
+    int right;
+    struct ShellString file_name;
+};
+
 struct ArgumentList {
     struct ShellString* arguments;
     int argument_count;
@@ -15,6 +32,10 @@ void free_arg_list(const struct ArgumentList* list);
 struct Command {
     struct ShellString command_name;
     struct ArgumentList arguments;
+
+    struct Redirection* redirections;
+    int redirection_count;
+    int redirection_capacity;
 };
 
 enum ExprType {
@@ -58,5 +79,6 @@ void print_program(const struct Program* program, int indent);
 void print_statement(const struct Stmt* stmt, int indent);
 void print_expr(const struct Expr* expr, int indent);
 void print_command(const struct Command* command);
+void print_redirection(const struct Redirection* redirection);
 
 #endif  // CASH_AST_H

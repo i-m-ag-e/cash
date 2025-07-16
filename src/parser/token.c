@@ -27,9 +27,7 @@ const char* token_type_to_string(enum TokenType type) {
         TO_STRING_TT(TOKEN_LPAREN, "(");
         TO_STRING_TT(TOKEN_RPAREN, ")");
         TO_STRING_TT(TOKEN_PIPE, "|");
-        TO_STRING_TT(TOKEN_REDIRECT_IN, "<");
-        TO_STRING_TT(TOKEN_REDIRECT_OUT, ">");
-        TO_STRING_TT(TOKEN_REDIRECT_APPEND, ">>");
+        TO_STRING_TT(TOKEN_REDIRECT, ">");
         TO_STRING_TT(TOKEN_ERROR, "<ERROR>");
         TO_STRING_TT(TOKEN_EOF, "<EOF>");
     }
@@ -53,9 +51,7 @@ const char* dump_token_type(enum TokenType type) {
         CASE_TT(TOKEN_NOT);
 
         CASE_TT(TOKEN_PIPE);
-        CASE_TT(TOKEN_REDIRECT_IN);
-        CASE_TT(TOKEN_REDIRECT_OUT);
-        CASE_TT(TOKEN_REDIRECT_APPEND);
+        CASE_TT(TOKEN_REDIRECT);
 
         CASE_TT(TOKEN_ERROR);
         CASE_TT(TOKEN_EOF);

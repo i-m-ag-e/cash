@@ -20,9 +20,7 @@ enum TokenType {
     TOKEN_NOT,
 
     TOKEN_PIPE,
-    TOKEN_REDIRECT_IN,
-    TOKEN_REDIRECT_OUT,
-    TOKEN_REDIRECT_APPEND,
+    TOKEN_REDIRECT,
 
     TOKEN_ERROR,
     TOKEN_EOF,
@@ -35,12 +33,17 @@ struct Token {
     int last_line;
     int last_column;
 
-    const char* lexeme;
     int lexeme_length;
+    const char* lexeme;
 
     union {
         long number;
         struct ShellString word;
+        struct {
+            enum RedirectionType type;
+            int left;
+            int right;
+        } redirection;
     } value;
 };
 
