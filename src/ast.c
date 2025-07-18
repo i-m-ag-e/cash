@@ -169,8 +169,51 @@ void print_command(const struct Command *command) {
     printf("%s" RESET, command->arguments.argument_count ? " " : "");
     for (int i = 0; i < command->arguments.argument_count; ++i) {
         print_string(&command->arguments.arguments[i]);
-        if (i != command->arguments.argument_count - 1)
-            printf(" ");
+        printf(" ");
+    }
+
+    for (int i = 0; i < command->redirection_count; ++i) {
+        print_redirection(&command->redirections[i]);
+        printf(" ");
     }
     printf(")");
+}
+
+void print_redirection(const struct Redirection *redirection) {
+    printf("( ");
+    if (redirection->left != -1) {
+        printf(CYAN "%d" RESET, redirection->left);
+    }
+
+    switch (redirection->type) {
+        case REDIRECT_IN:
+            printf(YELLOW "<" RESET);
+            break;
+        case REDIRECT_OUT:
+            printf(YELLOW ">" RESET);
+            break;
+        case REDIRECT_OUT_DUPLICATE:
+            printf(YELLOW ">&" RESET);
+            break;
+        case REDIRECT_OUTERR:
+            printf(YELLOW "&>" RESET);
+            break;
+        case REDIRECT_APPEND_OUT:
+            printf(YELLOW ">>" RESET);
+            break;
+        case REDIRECT_APPEND_OUTERR:
+            printf(YELLOW "&>>" RESET);
+            break;
+        case REDIRECT_INOUT:
+            printf(YELLOW "<>" RESET);
+            break;
+    }
+
+    if (redirection->right != -1) {
+        printf(CYAN "%d" RESET, redirection->right);
+    } else {
+        printf(" ");
+        print_string(&redirection->file_name);
+    }
+    printf(" )");
 }

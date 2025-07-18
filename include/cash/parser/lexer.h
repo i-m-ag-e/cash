@@ -11,6 +11,7 @@ struct Lexer {
     const char* input;
     int token_start;
     int position;
+    int backtrack_position;
 
     int first_line;
     int first_column;
@@ -24,6 +25,7 @@ struct Lexer {
 
     bool continue_string;
     bool substitution_in_quotes;
+    bool string_was_number;
     struct ShellString current_string;
 };
 

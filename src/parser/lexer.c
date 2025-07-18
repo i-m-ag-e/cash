@@ -3,6 +3,7 @@
 #include <cash/parser/lexer.h>
 #include <cash/parser/token.h>
 #include <ctype.h>
+#include <limits.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -13,11 +14,14 @@
 extern bool repl_mode;
 
 static char peek(const struct Lexer* lexer);
-// static char peek_next(struct Lexer* lexer);
+static char peek_next(const struct Lexer* lexer);
 static char advance(struct Lexer* lexer);
 static bool match(struct Lexer* lexer, char c);
 static bool is_at_end(const struct Lexer* lexer);
+static void backtrack(struct Lexer* lexer);
 
+static struct Token make_redirection_token(enum RedirectionType type, int left,
+                                           int right, struct Lexer* lexer);
 static struct Token make_token(enum TokenType type, struct Lexer* lexer);
 static struct Token make_error(struct Lexer* lexer);
 static struct Token make_eof(const struct Lexer* lexer);
@@ -25,6 +29,7 @@ static struct Token make_eof(const struct Lexer* lexer);
 static void skip_ws(struct Lexer* lexer);
 static struct Token consume_lines(struct Lexer* lexer);
 
+static bool try_consume_number(struct Lexer* lexer, bool eof_ok, int* number);
 static struct Token consume_string(struct Lexer* lexer);
 static void consume_sq_string(struct Lexer* lexer);
 static void consume_dq_string(struct Lexer* lexer);
@@ -40,8 +45,8 @@ static void lexer_reset_queue(struct Lexer* lexer);
 static const bool kPunctuation[128] = {
     ['>'] = true,  ['|'] = true,  ['<'] = true,  ['('] = true, [')'] = true,
     ['\''] = true, ['"'] = true,  [';'] = true,  ['&'] = true, ['`'] = true,
-    ['$'] = true,  ['\t'] = true, ['\n'] = true, [' '] = true};
-// ">|<()'\";&`$\t\n"
+    ['$'] = true,  ['\t'] = true, ['\n'] = true, [' '] = true, ['\r'] = true};
+// ">|<()'\";&`$\t\n\r"
 
 struct Lexer* lexer_new(const char* input, bool repl_mode) {
     struct Lexer* lexer = malloc(sizeof(struct Lexer));
@@ -51,6 +56,7 @@ struct Lexer* lexer_new(const char* input, bool repl_mode) {
         .input = input,
         .token_start = 0,
         .position = 0,
+        .backtrack_position = 0,
 
         .first_line = 1,
         .first_column = 1,
@@ -71,12 +77,14 @@ struct Lexer* lexer_new(const char* input, bool repl_mode) {
 void reset_lexer(const char* input, struct Lexer* lexer) {
     lexer->error = false;
     lexer->input = input;
-    lexer->token_start = lexer->position = 0;
+    lexer->token_start = 0;
+    lexer->position = 0;
     lexer->first_column = lexer->first_line = lexer->last_column =
         lexer->last_line = 1;
     lexer_reset_queue(lexer);
     lexer->continue_string = false;
     lexer->substitution_in_quotes = false;
+    lexer->backtrack_position = 0;
 }
 
 void free_lexer(const struct Lexer* lexer) {
@@ -96,8 +104,9 @@ struct Token lexer_next_token(struct Lexer* lexer) {
 void lexer_lex_full(struct Lexer* lexer) {
     while (true) {
         const struct Token token = lexer_lex(lexer);
+        dump_token(&token);
         lexer_push_token(lexer, token);
-        if (token.type == TOKEN_EOF)
+        if (token.type == TOKEN_EOF || token.type == TOKEN_ERROR)
             break;
     }
 }
@@ -118,6 +127,42 @@ static struct Token lexer_lex(struct Lexer* lexer) {
     if (is_at_end(lexer))
         return make_eof(lexer);
 
+    lexer->backtrack_position = lexer->position;
+    int left = -1, right = -1;
+    enum RedirectionType redir_type = REDIRECT_IN;
+
+    if (try_consume_number(lexer, false, &left)) {
+        if (peek(lexer) == '>' && peek_next(lexer) != '&') {
+            advance(lexer);
+            if (peek(lexer) == '>') {
+                advance(lexer);
+                return make_redirection_token(REDIRECT_APPEND_OUT, left, -1,
+                                              lexer);
+            }
+            return make_redirection_token(REDIRECT_OUT, left, -1, lexer);
+        }
+
+        if (peek(lexer) == '<') {
+            advance(lexer);
+
+            if (peek(lexer) == '>') {
+                advance(lexer);
+                return make_redirection_token(REDIRECT_INOUT, left, -1, lexer);
+            }
+            return make_redirection_token(REDIRECT_IN, left, -1, lexer);
+        }
+
+        if (peek(lexer) != '>' || peek_next(lexer) != '&') {
+            struct ShellString string = make_string();
+            add_string_literal(&string, STRING_COMPONENT_LITERAL,
+                               &lexer->input[lexer->backtrack_position],
+                               lexer->position - lexer->backtrack_position, 0);
+            struct Token token = make_token(TOKEN_WORD, lexer);
+            token.value.word = string;
+            return token;
+        }
+    }
+
     switch (peek(lexer)) {
         CHAR('(', TOKEN_LPAREN);
         CHAR(')', TOKEN_RPAREN);
@@ -125,8 +170,48 @@ static struct Token lexer_lex(struct Lexer* lexer) {
         CHAR('!', TOKEN_NOT);
         case '&':
             advance(lexer);
+            if (peek(lexer) == '>') {
+                advance(lexer);
+                if (peek(lexer) == '>') {
+                    advance(lexer);
+                    return make_redirection_token(REDIRECT_APPEND_OUTERR, -1,
+                                                  -1, lexer);
+                }
+                return make_redirection_token(REDIRECT_OUTERR, -1, -1, lexer);
+            }
             return match(lexer, '&') ? make_token(TOKEN_AND, lexer)
                                      : make_token(TOKEN_AMP, lexer);
+        case '>': {
+            advance(lexer);
+            if (peek(lexer) == '>') {
+                advance(lexer);
+                return make_redirection_token(REDIRECT_APPEND_OUT, left, -1,
+                                              lexer);
+            }
+            if (peek(lexer) == '&') {
+                advance(lexer);
+                lexer->backtrack_position = lexer->position;
+                if (!try_consume_number(lexer, true, &right)) {
+                    CASH_ERROR(EXIT_FAILURE,
+                               "expected file descriptor after '>&' in "
+                               "redirection, got '%.*s'\n",
+                               1,
+                               peek(lexer) == '\0'
+                                   ? "<eof>"
+                                   : &lexer->input[lexer->position]);
+                    lexer->error = true;
+                    return make_error(lexer);
+                }
+                return make_redirection_token(REDIRECT_OUT_DUPLICATE, left,
+                                              right, lexer);
+            }
+            return make_redirection_token(REDIRECT_OUT, -1, -1, lexer);
+        }
+        case '<':
+            advance(lexer);
+            return match(lexer, '>')
+                       ? make_redirection_token(REDIRECT_INOUT, left, -1, lexer)
+                       : make_redirection_token(REDIRECT_IN, -1, -1, lexer);
         case '|':
             advance(lexer);
             return match(lexer, '|') ? make_token(TOKEN_OR, lexer)
@@ -143,11 +228,11 @@ static char peek(const struct Lexer* lexer) {
     return lexer->input[lexer->position];
 }
 
-// static char peek_next(struct Lexer* lexer) {
-//     if (is_at_end(lexer))
-//         return '\0';
-//     return lexer->input[lexer->position + 1];
-// }
+static char peek_next(const struct Lexer* lexer) {
+    if (is_at_end(lexer))
+        return '\0';
+    return lexer->input[lexer->position + 1];
+}
 
 static char advance(struct Lexer* lexer) {
     if (is_at_end(lexer))
@@ -159,11 +244,49 @@ static bool is_at_end(const struct Lexer* lexer) {
     return peek(lexer) == '\0';
 }
 
+static void backtrack(struct Lexer* lexer) {
+    lexer->last_column -= (lexer->position - lexer->backtrack_position);
+    lexer->position = lexer->backtrack_position;
+}
+
 static void skip_ws(struct Lexer* lexer) {
     while (peek(lexer) != '\n' && isspace(peek(lexer))) {
         lexer->last_column++;
         advance(lexer);
     }
+}
+
+static bool try_consume_number(struct Lexer* lexer, bool eof_ok, int* number) {
+    if (!isdigit(peek(lexer))) {
+        return false;
+    }
+
+    char* endptr;
+    const char* begin = &lexer->input[lexer->position];
+    const long n = strtol(begin, &endptr, 10);
+    if (endptr == begin) {
+        return false;
+    }
+
+    if (errno == ERANGE || n > INT_MAX) {
+        lexer->position = lexer->backtrack_position;
+        return false;
+    }
+
+    if (*endptr == '\0' && !eof_ok) {
+        lexer->position = lexer->backtrack_position;
+        return false;
+    }
+
+    if (*endptr != '\0' && !kPunctuation[(int)*endptr]) {
+        lexer->position = lexer->backtrack_position;
+        return false;
+    }
+
+    *number = (int)n;
+    lexer->position += (int)(endptr - begin);
+    lexer->last_column += (int)(endptr - begin);
+    return true;
 }
 
 static struct Token consume_lines(struct Lexer* lexer) {
@@ -186,6 +309,15 @@ static bool match(struct Lexer* lexer, char c) {
         return true;
     }
     return false;
+}
+
+static struct Token make_redirection_token(enum RedirectionType type, int left,
+                                           int right, struct Lexer* lexer) {
+    struct Token tok = make_token(TOKEN_REDIRECT, lexer);
+    tok.value.redirection.type = type;
+    tok.value.redirection.left = left;
+    tok.value.redirection.right = right;
+    return tok;
 }
 
 static struct Token make_token(enum TokenType type, struct Lexer* lexer) {
@@ -233,6 +365,7 @@ static struct Token make_eof(const struct Lexer* lexer) {
 static struct Token consume_string(struct Lexer* lexer) {
     lexer->continue_string = true;
     lexer->current_string = make_string();
+    lexer->string_was_number = true;
     while (true) {
         if (lexer->error)
             return make_error(lexer);
@@ -244,14 +377,17 @@ static struct Token consume_string(struct Lexer* lexer) {
         }
 
         const char c = peek(lexer);
-        if (c == '\'')
+        if (c == '\'') {
+            lexer->string_was_number = false;
             consume_sq_string(lexer);
-        else if (c == '"') {
+        } else if (c == '"') {
+            lexer->string_was_number = false;
             advance(lexer);
             consume_dq_string(lexer);
-        } else if (c == '$')
+        } else if (c == '$') {
             consume_substitution(lexer);
-        else if (!is_at_end(lexer) && !kPunctuation[(int)c])
+            lexer->string_was_number = false;
+        } else if (!is_at_end(lexer) && !kPunctuation[(int)c])
             consume_unquoted_string(lexer);
         else
             break;
@@ -268,6 +404,8 @@ static void consume_unquoted_string(struct Lexer* lexer) {
     const int string_start = lexer->position;
     int escapes = 0;
     while (!is_at_end(lexer) && !kPunctuation[(int)(c = peek(lexer))]) {
+        if (!isdigit(c))
+            lexer->string_was_number = false;
         if (c == '\\') {
             escapes++;
             advance(lexer);
