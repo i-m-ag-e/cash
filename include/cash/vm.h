@@ -19,6 +19,6 @@ struct Vm make_vm(void);
 void free_vm(const struct Vm* vm);
 
 int run_program(struct Vm* vm, const struct Program* program);
-int run_command(struct Vm* vm, struct Command* command);
+int run_command(struct Vm* vm, struct Command* command, int in, int out);
 
 #endif  // CASH_VM_H

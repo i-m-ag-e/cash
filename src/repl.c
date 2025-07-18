@@ -28,7 +28,6 @@ void run_repl(struct Repl* repl) {
 
         reset_parser(repl->line, &repl->parser);
         lexer_lex_full(repl->parser.lexer);
-        printf("???\n");
 
         const bool success = parse_program(&repl->parser);
 

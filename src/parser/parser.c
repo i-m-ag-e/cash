@@ -214,7 +214,6 @@ static bool parse_command(struct Parser* parser, struct Expr* expr) {
     bool break_out = false;
 
     while (!is_at_end(parser) && !break_out) {
-        printf("Whooo\n");
         if (parser->error)
             return false;
 
@@ -246,6 +245,9 @@ static bool parse_command(struct Parser* parser, struct Expr* expr) {
                 handle_redirection(parser, &command, advance(parser));
                 break;
 
+            case TOKEN_ERROR:
+                parser->error = true;
+                return false;
             default:
                 CASH_ERROR(EXIT_FAILURE, "IMPOSSIBLE");
                 exit(EXIT_FAILURE);

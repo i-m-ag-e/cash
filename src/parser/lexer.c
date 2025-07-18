@@ -106,7 +106,7 @@ void lexer_lex_full(struct Lexer* lexer) {
         const struct Token token = lexer_lex(lexer);
         dump_token(&token);
         lexer_push_token(lexer, token);
-        if (token.type == TOKEN_EOF)
+        if (token.type == TOKEN_EOF || token.type == TOKEN_ERROR)
             break;
     }
 }
@@ -132,10 +132,14 @@ static struct Token lexer_lex(struct Lexer* lexer) {
     enum RedirectionType redir_type = REDIRECT_IN;
 
     if (try_consume_number(lexer, false, &left)) {
-        if (peek(lexer) == '>' && peek_next(lexer) == '>') {
+        if (peek(lexer) == '>' && peek_next(lexer) != '&') {
             advance(lexer);
-            advance(lexer);
-            return make_redirection_token(REDIRECT_APPEND_OUT, left, -1, lexer);
+            if (peek(lexer) == '>') {
+                advance(lexer);
+                return make_redirection_token(REDIRECT_APPEND_OUT, left, -1,
+                                              lexer);
+            }
+            return make_redirection_token(REDIRECT_OUT, left, -1, lexer);
         }
 
         if (peek(lexer) == '<') {
@@ -148,7 +152,7 @@ static struct Token lexer_lex(struct Lexer* lexer) {
             return make_redirection_token(REDIRECT_IN, left, -1, lexer);
         }
 
-        if (peek(lexer) != '>') {
+        if (peek(lexer) != '>' || peek_next(lexer) != '&') {
             struct ShellString string = make_string();
             add_string_literal(&string, STRING_COMPONENT_LITERAL,
                                &lexer->input[lexer->backtrack_position],
@@ -186,12 +190,22 @@ static struct Token lexer_lex(struct Lexer* lexer) {
             }
             if (peek(lexer) == '&') {
                 advance(lexer);
-                redir_type = REDIRECT_OUT_DUPLICATE;
-            } else
-                redir_type = REDIRECT_OUT;
-
-            try_consume_number(lexer, true, &right);
-            return make_redirection_token(redir_type, left, right, lexer);
+                lexer->backtrack_position = lexer->position;
+                if (!try_consume_number(lexer, true, &right)) {
+                    CASH_ERROR(EXIT_FAILURE,
+                               "expected file descriptor after '>&' in "
+                               "redirection, got '%.*s'\n",
+                               1,
+                               peek(lexer) == '\0'
+                                   ? "<eof>"
+                                   : &lexer->input[lexer->position]);
+                    lexer->error = true;
+                    return make_error(lexer);
+                }
+                return make_redirection_token(REDIRECT_OUT_DUPLICATE, left,
+                                              right, lexer);
+            }
+            return make_redirection_token(REDIRECT_OUT, -1, -1, lexer);
         }
         case '<':
             advance(lexer);
@@ -264,7 +278,7 @@ static bool try_consume_number(struct Lexer* lexer, bool eof_ok, int* number) {
         return false;
     }
 
-    if (!kPunctuation[(int)*endptr]) {
+    if (*endptr != '\0' && !kPunctuation[(int)*endptr]) {
         lexer->position = lexer->backtrack_position;
         return false;
     }
