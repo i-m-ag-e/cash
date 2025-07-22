@@ -7,7 +7,7 @@ project(cash
 set(CMAKE_C_STANDARD 17)
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -Wextra -Wpedantic")
 set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -ggdb -O0")
-set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O3")
+set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O3 -Wall -Wextra -Wpedantic")
 
 add_executable(cash
     src/parser/token.c
@@ -24,4 +24,3 @@ add_executable(cash
 target_include_directories(cash PRIVATE "${CMAKE_SOURCE_DIR}/include")
 target_include_directories(cash PUBLIC "${CMAKE_BINARY_DIR}/include")
 target_link_libraries(cash PUBLIC readline)
-target_link_libraries(cash PUBLIC y)

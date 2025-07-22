@@ -2,6 +2,7 @@
 #define CASH_AST_H
 
 #include <cash/string.h>
+#include <stdbool.h>
 
 enum RedirectionType {
     REDIRECT_IN,
@@ -25,7 +26,7 @@ struct ArgumentList {
     int argument_count;
     int argument_capacity;
 };
-struct ArgumentList make_arg_list();
+struct ArgumentList make_arg_list(void);
 void add_argument(struct ArgumentList* list, struct ShellString arg);
 void free_arg_list(const struct ArgumentList* list);
 
@@ -50,6 +51,8 @@ enum ExprType {
 
 struct Expr {
     enum ExprType type;
+    struct StringView expr_text;
+    bool background;
     union {
         struct Program* subshell;  // EXPR_SUBSHELL
         struct Command command;    // EXPR_COMMAND
@@ -71,14 +74,16 @@ struct Program {
     int statement_count;
     int statement_capacity;
 };
-struct Program make_program();
+struct Program make_program(void);
 void add_statement(struct Program* program, struct Stmt stmt);
 void free_program(const struct Program* program);
 
+#ifndef NDEBUG
 void print_program(const struct Program* program, int indent);
 void print_statement(const struct Stmt* stmt, int indent);
 void print_expr(const struct Expr* expr, int indent);
 void print_command(const struct Command* command);
 void print_redirection(const struct Redirection* redirection);
+#endif
 
 #endif  // CASH_AST_H

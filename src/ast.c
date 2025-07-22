@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifndef NDEBUG
 #define INDENT "    "
 
 static const char *kIndents[] = {
@@ -19,10 +20,11 @@ static const char *kIndents[] = {
     INDENT INDENT INDENT INDENT INDENT INDENT,
     INDENT INDENT INDENT INDENT INDENT INDENT INDENT,
 };
+#endif
 
 extern bool repl_mode;
 
-struct ArgumentList make_arg_list() {
+struct ArgumentList make_arg_list(void) {
     return (struct ArgumentList){
         .argument_capacity = 0, .argument_count = 0, .arguments = NULL};
 }
@@ -69,7 +71,7 @@ void free_stmt(const struct Stmt *stmt) {
     free_expr(&stmt->expr);
 }
 
-struct Program make_program() {
+struct Program make_program(void) {
     return (struct Program){
         .statement_capacity = 0, .statement_count = 0, .statements = NULL};
 }
@@ -85,25 +87,26 @@ void free_program(const struct Program *program) {
     free(program->statements);
 }
 
+#ifndef NDEBUG
 void print_string_component(const struct StringComponent *component) {
     switch (component->type) {
         case STRING_COMPONENT_LITERAL:
-            printf(MAGENTA "%s" RESET, component->literal);
+            fprintf(stderr, MAGENTA "%s" RESET, component->literal);
             break;
         case STRING_COMPONENT_DQ:
-            printf(BOLD BLUE "\"%s\"" RESET, component->literal);
+            fprintf(stderr, BOLD BLUE "\"%s\"" RESET, component->literal);
             break;
         case STRING_COMPONENT_SQ:
-            printf(BOLD CYAN "'%s'" RESET, component->literal);
+            fprintf(stderr, BOLD CYAN "'%s'" RESET, component->literal);
             break;
         case STRING_COMPONENT_VAR_SUB:
-            printf(GREEN "$%s" RESET, component->var_substitution);
+            fprintf(stderr, GREEN "$%s" RESET, component->var_substitution);
             break;
         case STRING_COMPONENT_BRACED_SUB:
-            printf(GREEN "$%s" RESET, component->braced_substitution);
+            fprintf(stderr, GREEN "$%s" RESET, component->braced_substitution);
             break;
         case STRING_COMPONENT_COMMAND_SUBSTITUTION:
-            printf("command sub");
+            fprintf(stderr, "command sub");
             break;
     }
 }
@@ -114,41 +117,43 @@ void print_string(const struct ShellString *string) {
 }
 
 void print_program(const struct Program *program, int indent) {
-    printf("Program([<len: %d>\n", program->statement_count);
+    fprintf(stderr, "Program([<len: %d>\n", program->statement_count);
     for (int i = 0; i < program->statement_count; ++i) {
-        printf("%s", kIndents[indent + 1]);
+        fprintf(stderr, "%s", kIndents[indent + 1]);
         print_statement(&program->statements[i], indent + 1);
-        printf("\n");
+        fprintf(stderr, "\n");
     }
-    printf("%s])", kIndents[indent]);
+    fprintf(stderr, "%s])", kIndents[indent]);
 }
 
 void print_expr(const struct Expr *expr, int indent) {
+    if (expr->background)
+        fprintf(stderr, BOLD YELLOW "(background)" RESET);
     switch (expr->type) {
         case EXPR_SUBSHELL:
-            printf("Subshell( ");
+            fprintf(stderr, "Subshell( ");
             print_program(expr->subshell, indent + 1);
-            printf(" )");
+            fprintf(stderr, " )");
             break;
 
         case EXPR_PIPELINE:
         case EXPR_AND:
         case EXPR_OR:
-            printf("Binary( %s\n%s",
-                   expr->type == EXPR_PIPELINE ? "|"
-                   : expr->type == EXPR_AND    ? "&&"
-                                               : "||",
-                   kIndents[indent + 1]);
+            fprintf(stderr, "Binary( %s\n%s",
+                    expr->type == EXPR_PIPELINE ? "|"
+                    : expr->type == EXPR_AND    ? "&&"
+                                                : "||",
+                    kIndents[indent + 1]);
             print_expr(expr->binary.left, indent + 1);
-            printf(",\n%s", kIndents[indent + 1]);
+            fprintf(stderr, ",\n%s", kIndents[indent + 1]);
             print_expr(expr->binary.right, indent + 1);
-            printf(" )");
+            fprintf(stderr, " )");
             break;
 
         case EXPR_NOT:
-            printf("Not( ");
+            fprintf(stderr, "Not( ");
             print_expr(expr->binary.left, indent + 1);
-            printf(" )");
+            fprintf(stderr, " )");
             break;
 
         case EXPR_COMMAND:
@@ -158,62 +163,64 @@ void print_expr(const struct Expr *expr, int indent) {
 }
 
 void print_statement(const struct Stmt *stmt, int indent) {
-    printf("Stmt( ");
+    fprintf(stderr, "Stmt( ");
     print_expr(&stmt->expr, indent);
-    printf(" )");
+    fprintf(stderr, " )");
 }
 
 void print_command(const struct Command *command) {
-    printf("Command(<args: %d> " BOLD CYAN, command->arguments.argument_count);
+    fprintf(stderr, "Command(<args: %d> " BOLD CYAN,
+            command->arguments.argument_count);
     print_string(&command->command_name);
-    printf("%s" RESET, command->arguments.argument_count ? " " : "");
+    fprintf(stderr, "%s" RESET, command->arguments.argument_count ? " " : "");
     for (int i = 0; i < command->arguments.argument_count; ++i) {
         print_string(&command->arguments.arguments[i]);
-        printf(" ");
+        fprintf(stderr, " ");
     }
 
     for (int i = 0; i < command->redirection_count; ++i) {
         print_redirection(&command->redirections[i]);
-        printf(" ");
+        fprintf(stderr, " ");
     }
-    printf(")");
+    fprintf(stderr, ")");
 }
 
 void print_redirection(const struct Redirection *redirection) {
-    printf("( ");
+    fprintf(stderr, "( ");
     if (redirection->left != -1) {
-        printf(CYAN "%d" RESET, redirection->left);
+        fprintf(stderr, CYAN "%d" RESET, redirection->left);
     }
 
     switch (redirection->type) {
         case REDIRECT_IN:
-            printf(YELLOW "<" RESET);
+            fprintf(stderr, YELLOW "<" RESET);
             break;
         case REDIRECT_OUT:
-            printf(YELLOW ">" RESET);
+            fprintf(stderr, YELLOW ">" RESET);
             break;
         case REDIRECT_OUT_DUPLICATE:
-            printf(YELLOW ">&" RESET);
+            fprintf(stderr, YELLOW ">&" RESET);
             break;
         case REDIRECT_OUTERR:
-            printf(YELLOW "&>" RESET);
+            fprintf(stderr, YELLOW "&>" RESET);
             break;
         case REDIRECT_APPEND_OUT:
-            printf(YELLOW ">>" RESET);
+            fprintf(stderr, YELLOW ">>" RESET);
             break;
         case REDIRECT_APPEND_OUTERR:
-            printf(YELLOW "&>>" RESET);
+            fprintf(stderr, YELLOW "&>>" RESET);
             break;
         case REDIRECT_INOUT:
-            printf(YELLOW "<>" RESET);
+            fprintf(stderr, YELLOW "<>" RESET);
             break;
     }
 
     if (redirection->right != -1) {
-        printf(CYAN "%d" RESET, redirection->right);
+        fprintf(stderr, CYAN "%d" RESET, redirection->right);
     } else {
-        printf(" ");
+        fprintf(stderr, " ");
         print_string(&redirection->file_name);
     }
-    printf(" )");
+    fprintf(stderr, " )");
 }
+#endif
