@@ -16,6 +16,9 @@
 #include <termios.h>
 #include <time.h>
 #include <unistd.h>
+#ifndef WAIT_ANY
+#define WAIT_ANY ((pid_t) - 1)
+#endif
 
 extern bool repl_mode;
 extern char **environ;

@@ -12,7 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-extern char *const *environ;
+extern char **environ;
 extern bool repl_mode;
 
 const struct passwd *get_pw(void) {
