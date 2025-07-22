@@ -95,8 +95,8 @@ cd build
 Create the CMake configuration files into the build directory and build the repo
 
 ```sh
-cmake ..
-cmake --build . -DCMAKE_BUILD_TYPE=Release
+cmake .. -DCMAKE_BUILD_TYPE=Release
+cmake --build . 
 ```
 
 Building in debug mode enables a lot of debug informtion being printed onto the scree, which might not be desirable.

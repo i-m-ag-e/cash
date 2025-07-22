@@ -13,6 +13,7 @@ add_executable(cash
     src/parser/token.c
     src/parser/lexer.c
     src/parser/parser.c
+    src/job_control.c
     src/vm.c
     src/util.c
     src/string.c
