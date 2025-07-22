@@ -48,9 +48,9 @@ struct Token {
 };
 
 const char* token_type_to_string(enum TokenType type);
+const char* dump_token_type(enum TokenType type);
 
 #ifndef NDEBUG
-const char* dump_token_type(enum TokenType type);
 void dump_token(const struct Token* token);
 #endif
 

@@ -18,7 +18,6 @@ static char peek_next(const struct Lexer* lexer);
 static char advance(struct Lexer* lexer);
 static bool match(struct Lexer* lexer, char c);
 static bool is_at_end(const struct Lexer* lexer);
-static void backtrack(struct Lexer* lexer);
 
 static struct Token make_redirection_token(enum RedirectionType type, int left,
                                            int right, struct Lexer* lexer);
@@ -104,7 +103,9 @@ struct Token lexer_next_token(struct Lexer* lexer) {
 void lexer_lex_full(struct Lexer* lexer) {
     while (true) {
         const struct Token token = lexer_lex(lexer);
+#ifndef NDEBUG
         dump_token(&token);
+#endif
         lexer_push_token(lexer, token);
         if (token.type == TOKEN_EOF || token.type == TOKEN_ERROR)
             break;
@@ -129,7 +130,6 @@ static struct Token lexer_lex(struct Lexer* lexer) {
 
     lexer->backtrack_position = lexer->position;
     int left = -1, right = -1;
-    enum RedirectionType redir_type = REDIRECT_IN;
 
     if (try_consume_number(lexer, false, &left)) {
         if (peek(lexer) == '>' && peek_next(lexer) != '&') {
@@ -242,11 +242,6 @@ static char advance(struct Lexer* lexer) {
 
 static bool is_at_end(const struct Lexer* lexer) {
     return peek(lexer) == '\0';
-}
-
-static void backtrack(struct Lexer* lexer) {
-    lexer->last_column -= (lexer->position - lexer->backtrack_position);
-    lexer->position = lexer->backtrack_position;
 }
 
 static void skip_ws(struct Lexer* lexer) {
@@ -414,9 +409,10 @@ static void consume_unquoted_string(struct Lexer* lexer) {
     }
 
     lexer->substitution_in_quotes = false;
-    add_string_literal(&lexer->current_string, STRING_COMPONENT_LITERAL,
-                       &lexer->input[string_start],
-                       lexer->position - string_start, escapes);
+    if (lexer->position - string_start != 0)
+        add_string_literal(&lexer->current_string, STRING_COMPONENT_LITERAL,
+                           &lexer->input[string_start],
+                           lexer->position - string_start, escapes);
 }
 
 static void consume_dq_string(struct Lexer* lexer) {
@@ -445,9 +441,10 @@ static void consume_dq_string(struct Lexer* lexer) {
     }
     advance(lexer);
 
-    add_string_literal(&lexer->current_string, STRING_COMPONENT_DQ,
-                       &lexer->input[string_start],
-                       lexer->position - string_start - 1, escapes);
+    if (lexer->position - string_start - 1 != 0)
+        add_string_literal(&lexer->current_string, STRING_COMPONENT_DQ,
+                           &lexer->input[string_start],
+                           lexer->position - string_start - 1, escapes);
 }
 
 static void consume_sq_string(struct Lexer* lexer) {
@@ -464,17 +461,18 @@ static void consume_sq_string(struct Lexer* lexer) {
     }
     advance(lexer);
 
-    add_string_literal(&lexer->current_string, STRING_COMPONENT_SQ,
-                       &lexer->input[string_start],
-                       lexer->position - string_start - 1, 0);
+    if (lexer->position - string_start - 1 != 0)
+        add_string_literal(&lexer->current_string, STRING_COMPONENT_SQ,
+                           &lexer->input[string_start],
+                           lexer->position - string_start - 1, 0);
 }
 
 static void consume_substitution(struct Lexer* lexer) {
     advance(lexer);  // '$'
 
-    if (peek(lexer) == '?') {
+    if (peek(lexer) == '?' || peek(lexer) == '#') {
         add_string_component(&lexer->current_string, STRING_COMPONENT_VAR_SUB,
-                             "?", 1);
+                             peek(lexer) == '?' ? "?" : "#", 1);
         advance(lexer);
         return;
     }
@@ -488,9 +486,10 @@ static void consume_substitution(struct Lexer* lexer) {
         advance(lexer);
     }
 
-    add_string_component(&lexer->current_string, STRING_COMPONENT_VAR_SUB,
-                         &lexer->input[name_start],
-                         lexer->position - name_start);
+    if (lexer->position - name_start != 0)
+        add_string_component(&lexer->current_string, STRING_COMPONENT_VAR_SUB,
+                             &lexer->input[name_start],
+                             lexer->position - name_start);
 }
 
 static void lexer_push_token(struct Lexer* lexer, struct Token token) {

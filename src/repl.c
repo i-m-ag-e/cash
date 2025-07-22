@@ -15,9 +15,10 @@ extern char** environ;
 
 static bool get_line(struct Repl* repl);
 
-struct Repl make_repl() {
-    return (struct Repl){
-        .parser = parser_new("", true), .vm = make_vm(), .line = NULL};
+struct Repl make_repl(int argc, char** argv) {
+    return (struct Repl){.parser = parser_new("", true),
+                         .vm = make_vm(argc, argv),
+                         .line = NULL};
 }
 
 void run_repl(struct Repl* repl) {
@@ -30,11 +31,17 @@ void run_repl(struct Repl* repl) {
         lexer_lex_full(repl->parser.lexer);
 
         const bool success = parse_program(&repl->parser);
+        if (repl->parser.error) {
+            repl->vm.previous_exit_code = EXIT_FAILURE;
+            continue;
+        }
 
         struct Program program = repl->parser.program;
         if (success) {
+#ifndef NDEBUG
             print_program(&program, 0);
             printf("\n");
+#endif
 
             run_program(&repl->vm, &program);
             free_program(&program);

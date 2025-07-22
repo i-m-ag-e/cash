@@ -1,12 +1,8 @@
-#ifndef NDEBUG
-
 #include <cash/colors.h>
 #include <cash/parser/token.h>
+#ifndef NDEBUG
 #include <stdio.h>
-
-#define CASE_TT(tt) \
-    case tt:        \
-        return #tt;
+#endif
 
 #define TO_STRING_TT(tt, repr) \
     case tt:                   \
@@ -34,6 +30,11 @@ const char* token_type_to_string(enum TokenType type) {
     return "";
 }
 
+#ifndef NDEBUG
+#define CASE_TT(tt) \
+    case tt:        \
+        return #tt;
+
 const char* dump_token_type(enum TokenType type) {
     switch (type) {
         CASE_TT(TOKEN_WORD);
@@ -60,13 +61,14 @@ const char* dump_token_type(enum TokenType type) {
 }
 
 void dump_token(const struct Token* token) {
-    printf(YELLOW "<" BOLD CYAN "%s" YELLOW "; " GREEN "%d" RESET "-" GREEN
-                  "%d" YELLOW ":" BLUE "%d" RESET "-" BLUE "%d" YELLOW
-                  "; " MAGENTA "\"%.*s\"" YELLOW ">\n" RESET,
-           dump_token_type(token->type), token->first_line, token->last_line,
-           token->first_column, token->last_column,
-           token->type == TOKEN_LINE_BREAK ? 2 : token->lexeme_length,
-           token->type == TOKEN_LINE_BREAK ? "\\n" : token->lexeme);
+    fprintf(stderr,
+            YELLOW "<" BOLD CYAN "%s" YELLOW "; " GREEN "%d" RESET "-" GREEN
+                   "%d" YELLOW ":" BLUE "%d" RESET "-" BLUE "%d" YELLOW
+                   "; " MAGENTA "\"%.*s\"" YELLOW ">\n" RESET,
+            dump_token_type(token->type), token->first_line, token->last_line,
+            token->first_column, token->last_column,
+            token->type == TOKEN_LINE_BREAK ? 2 : token->lexeme_length,
+            token->type == TOKEN_LINE_BREAK ? "\\n" : token->lexeme);
 }
 
 #endif

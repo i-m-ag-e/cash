@@ -15,7 +15,7 @@ static void add_component(struct ShellString *str,
              struct StringComponent);
 }
 
-struct ShellString make_string() {
+struct ShellString make_string(void) {
     return (struct ShellString){
         .component_capacity = 0, .component_count = 0, .components = NULL};
 }
@@ -113,7 +113,7 @@ void append(struct String *string, const char *value) {
 
 void append_n(struct String *string, const char *value, int length) {
     string->string = grow_string(string->string, string->length + length);
-    strncpy(&string->string[string->length], value, length);
+    memcpy(&string->string[string->length], value, length);
     string->length += length;
 }
 

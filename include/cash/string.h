@@ -37,7 +37,12 @@ struct String {
     int length;
 };
 
-struct ShellString make_string();
+struct StringView {
+    const char* string;
+    int length;
+};
+
+struct ShellString make_string(void);
 void add_string_literal(struct ShellString* str, enum StringComponentType type,
                         const char* literal, int length, int escapes);
 void add_string_component(struct ShellString* str,
@@ -53,7 +58,9 @@ void free_string_component(const struct StringComponent* component);
 void free_shell_string(const struct ShellString* str);
 void free_string(const struct String* string);
 
+#ifndef NDEBUG
 void print_string(const struct ShellString* string);
 void print_string_component(const struct StringComponent* component);
+#endif
 
 #endif  // CASH_STRING_H

@@ -3,6 +3,7 @@
 
 #include <cash/colors.h>
 #include <errno.h>
+#include <string.h>
 
 #define CASH_ERROR(status, fmt, ...)                                        \
     do {                                                                    \

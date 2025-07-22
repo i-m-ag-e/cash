@@ -10,7 +10,7 @@ struct Repl {
     char* line;
 };
 
-struct Repl make_repl(void);
+struct Repl make_repl(int argc, char** argv);
 void run_repl(struct Repl* repl);
 void free_repl(const struct Repl* repl);
 
