@@ -27,6 +27,8 @@ struct Vm {
     struct termios shell_term_state;
     bool repl_mode;
     bool notified_this_time;
+    bool is_subshell;
+    bool background;
 
     struct Job* job_list;
     struct Process* current_processes;
@@ -35,7 +37,7 @@ struct Vm {
     char** argv;
 };
 
-struct Vm make_vm(int argc, char** argv);
+struct Vm make_vm(int argc, char** argv, bool repl_mode, bool background);
 void free_vm(const struct Vm* vm);
 
 int run_program(struct Vm* vm, const struct Program* program);

@@ -9,7 +9,7 @@
     do {                                                                    \
         fprintf(stderr,                                                     \
                 RED "cash:  Error: " fmt RESET __VA_OPT__(, ) __VA_ARGS__); \
-        if (!repl_mode)                                                     \
+        if (!is_repl_mode)                                                  \
             exit(status);                                                   \
     } while (0)
 
@@ -17,7 +17,7 @@
     do {                                                                     \
         fprintf(stderr, RED "cash:  Error: " fmt RESET RED "%s: %s\n" RESET, \
                 __VA_ARGS__ __VA_OPT__(, ) how, strerror(errno));            \
-        if (!repl_mode)                                                      \
+        if (!is_repl_mode)                                                   \
             exit(status);                                                    \
     } while (0)
 

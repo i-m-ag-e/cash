@@ -5,9 +5,36 @@
 #include <pwd.h>
 
 #ifndef NDEBUG
-#define CASH_DEBUG(...) fprintf(stderr, __VA_ARGS__)
+
+static const char* debug_files[] = {"repl.c", "parser.c"};
+static const int debug_files_len = sizeof(debug_files) / sizeof(debug_files[0]);
+
+#define CASH_DEBUG(...)                                       \
+    do {                                                      \
+        for (int i = 0; i < debug_files_len; ++i) {           \
+            if (debug_files[i][0] == '*' ||                   \
+                strcmp(__FILE_NAME__, debug_files[i]) == 0) { \
+                fprintf(stderr, __VA_ARGS__);                 \
+                break;                                        \
+            }                                                 \
+        }                                                     \
+    } while (0)
+
+#define CASH_DEBUG_EXPR(expr)                                 \
+    do {                                                      \
+        for (int i = 0; i < debug_files_len; ++i) {           \
+            if (debug_files[i][0] == '*' ||                   \
+                strcmp(__FILE_NAME__, debug_files[i]) == 0) { \
+                (expr);                                       \
+                break;                                        \
+            }                                                 \
+        }                                                     \
+    } while (0)
 #else
 #define CASH_DEBUG(...) ((void)0)
+#define CASH_DEBUG_EXPR(expr) \
+    do {                      \
+    } while (0)
 #endif
 
 char* read_all_stdin(void);

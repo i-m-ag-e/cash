@@ -3,6 +3,7 @@
 #include <cash/error.h>
 #include <cash/job_control.h>
 #include <cash/string.h>
+#include <cash/util.h>
 #include <cash/vm.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -16,19 +17,20 @@
 #include <termios.h>
 #include <time.h>
 #include <unistd.h>
+
+#include "cash/colors.h"
+
 #ifndef WAIT_ANY
 #define WAIT_ANY ((pid_t) - 1)
 #endif
 
-extern bool repl_mode;
+extern bool is_repl_mode;
 extern char **environ;
-
-static void setup_redirections(struct RawCommand *raw_command);
 
 static int mark_process_status(struct Vm *vm, pid_t pid, int status);
 
 static void wait_for_job(struct Vm *vm, struct Job *job);
-static void put_job_in_foreground(struct Vm *vm, struct Job *job, bool cont);
+// static void put_job_in_foreground(struct Vm *vm, struct Job *job, bool cont);
 static void put_job_in_background(struct Job *job, bool cont);
 
 static void mark_job_as_running(struct Job *job);
@@ -37,11 +39,13 @@ static void continue_job(struct Vm *vm, struct Job *job, bool foreground);
 static void format_job_info_if_bkg(struct Job *job, const char *state);
 
 void free_raw_command(const struct RawCommand *raw_command) {
-    free(raw_command->name);
-    for (int i = 0; i < raw_command->args_count; ++i) {
-        free(raw_command->args[i]);
+    if (!raw_command->is_subshell) {
+        free(raw_command->as_cmd.name);
+        for (int i = 0; i < raw_command->as_cmd.args_count; ++i) {
+            free(raw_command->as_cmd.args[i]);
+        }
+        free(raw_command->as_cmd.args);
     }
-    free(raw_command->args);
     for (int i = 0; i < raw_command->redirs_count; ++i) {
         free(raw_command->redirs[i].file_name);
     }
@@ -119,12 +123,12 @@ void format_job_info(struct Job *job, const char *state, FILE *stream) {
 }
 
 static void format_job_info_if_bkg(struct Job *job, const char *state) {
-    if (job->background && repl_mode) {
+    if (job->background && is_repl_mode) {
         format_job_info(job, state, stderr);
     }
 }
 
-static void setup_redirections(struct RawCommand *raw_command) {
+void setup_redirections(struct RawCommand *raw_command) {
     for (int i = 0; i < raw_command->redirs_count; ++i) {
         const struct RawRedirection *redir = &raw_command->redirs[i];
         int left = redir->left;
@@ -167,23 +171,42 @@ static void setup_redirections(struct RawCommand *raw_command) {
     }
 }
 
+static void handle_signal(int sig) {
+    CASH_DEBUG(RED "no way bruh %d (%s)\n" RESET, sig, strsignal(sig));
+    signal(sig, SIG_DFL);
+}
+
 void launch_process(struct Vm *vm, struct Process *process, pid_t pgid,
                     pid_t pid, int in, int out, int err, bool foreground) {
-    int builtin = is_builtin(process->raw_command.name);
+    CASH_DEBUG(YELLOW "launching process %d: %s in %p\n" RESET, getpid(),
+               process->raw_command.is_subshell
+                   ? "subshell"
+                   : process->raw_command.as_cmd.name,
+               (void *)vm);
+    int builtin = process->raw_command.is_subshell
+                      ? -1
+                      : is_builtin(process->raw_command.as_cmd.name);
     if (vm->repl_mode && builtin == -1) {
+        pid = getpid();
         if (pgid == 0) {
             pgid = pid;
         }
+        CASH_DEBUG(YELLOW "Setting process group to %d (pid: %d)\n" RESET, pgid,
+                   pid);
         setpgid(pid, pgid);
         if (foreground) {
+            CASH_DEBUG(MAGENTA
+                       "ain't nobody's fool (have set terminal to %d)\n" RESET,
+                       pid);
             tcsetpgrp(STDIN_FILENO, pgid);
+            CASH_DEBUG("phew\n");
         }
 
         signal(SIGINT, SIG_DFL);
         signal(SIGQUIT, SIG_DFL);
-        signal(SIGTTIN, SIG_DFL);
-        signal(SIGTTOU, SIG_DFL);
-        signal(SIGTSTP, SIG_DFL);
+        signal(SIGTTIN, handle_signal);
+        signal(SIGTTOU, handle_signal);
+        signal(SIGTSTP, handle_signal);
         signal(SIGCHLD, SIG_DFL);
     }
 
@@ -200,20 +223,41 @@ void launch_process(struct Vm *vm, struct Process *process, pid_t pgid,
         close(err);
     }
 
+    if (!foreground)
+        is_repl_mode = false;
+
+    CASH_DEBUG(
+        "now before launching, I have an admission to mak; the pgid of %d "
+        "is %d ",
+        getpid(), getpgid(getpid()));
     setup_redirections(&process->raw_command);
+
+    if (process->raw_command.is_subshell) {
+        struct Vm new_vm = make_vm(vm->argc, vm->argv, false, !foreground);
+        new_vm.shell_pgid = getpid();
+        new_vm.shell_term_state = vm->shell_term_state;
+        new_vm.is_subshell = true;
+
+        int res = run_program(&new_vm, &process->raw_command.as_subshell);
+        CASH_DEBUG(YELLOW "subshell returned %d\n" RESET, res);
+        exit(res);
+    }
 
     if (builtin != -1) {
         int res = BUILTIN_FUNCS[builtin](vm, &process->raw_command);
         exit(res);
     }
 
-    execve(process->raw_command.name, process->raw_command.args, environ);
+    execve(process->raw_command.as_cmd.name, process->raw_command.as_cmd.args,
+           environ);
     CASH_PERROR(EXIT_FAILURE, "execve",
-                "could not execute %s: ", process->raw_command.name);
+                "could not execute %s: ", process->raw_command.as_cmd.name);
     exit(EXIT_FAILURE);
 }
 
 void launch_job(struct Vm *vm, struct Job *job, bool foreground) {
+    CASH_DEBUG("job %p in vm %p (pid: %d)\n", (void *)job, (void *)vm,
+               getpid());
     struct Process *process;
     pid_t pid;
     int pipefd[2];
@@ -224,6 +268,9 @@ void launch_job(struct Vm *vm, struct Job *job, bool foreground) {
 
     for (process = job->first_process; process != NULL;
          process = process->next_process) {
+        if (process->raw_command.as_cmd.name == NULL) {
+            continue;  // skip empty commands
+        }
         if (process->next_process != NULL) {
             if (pipe(pipefd) == -1) {
                 CASH_PERROR(EXIT_FAILURE, "pipe",
@@ -245,7 +292,7 @@ void launch_job(struct Vm *vm, struct Job *job, bool foreground) {
                            foreground);
         } else {
             process->pid = pid;
-            if (repl_mode) {
+            if (vm->repl_mode) {
                 if (job->pgid == 0)
                     job->pgid = pid;
                 setpgid(pid, job->pgid);
@@ -262,7 +309,7 @@ void launch_job(struct Vm *vm, struct Job *job, bool foreground) {
 
     format_job_info_if_bkg(job, "launched");
 
-    if (!repl_mode) {
+    if (!vm->repl_mode) {
         if (!foreground) {
             fprintf(stderr,
                     YELLOW
@@ -288,9 +335,11 @@ static void wait_for_job(struct Vm *vm, struct Job *job) {
              !job_is_completed(job));
 }
 
-static void put_job_in_foreground(struct Vm *vm, struct Job *job, bool cont) {
+void put_job_in_foreground(struct Vm *vm, struct Job *job, bool cont) {
     job->background = false;
+    CASH_DEBUG(RED "handing it over to pgid %ld\n" RESET, (long)job->pgid);
     tcsetpgrp(STDIN_FILENO, job->pgid);
+    CASH_DEBUG(MAGENTA "this was done\n" RESET);
 
     if (cont) {
         tcsetattr(STDIN_FILENO, TCSADRAIN, &job->term_state);
@@ -298,11 +347,17 @@ static void put_job_in_foreground(struct Vm *vm, struct Job *job, bool cont) {
             CASH_PERROR(EXIT_FAILURE, "kill", "could not continue job %ld",
                         (long)job->pgid);
         }
+        CASH_DEBUG(GREEN "I have unkilled the job %ld (%s)\n" RESET,
+                   (long)job->pgid, job->command);
     }
 
     wait_for_job(vm, job);
+    CASH_DEBUG(MAGENTA "waiting has ended in job %p in vm %p\n" RESET,
+               (void *)job, (void *)vm);
+    CASH_DEBUG(RED "idhar??????\n" RESET);
     tcsetpgrp(STDIN_FILENO, vm->shell_pgid);
 
+    CASH_DEBUG(RED "ive set it bro\n" RESET);
     tcgetattr(STDIN_FILENO, &job->term_state);
     tcsetattr(STDIN_FILENO, TCSADRAIN, &vm->shell_term_state);
 }
@@ -341,8 +396,8 @@ static int mark_process_status(struct Vm *vm, pid_t pid, int status) {
                     process->completed = true;
                     if (WIFSIGNALED(status)) {
                         process->terminated = true;
-                        fprintf(stderr, "Process %ld terminated by signal %d\n",
-                                (long)pid, WTERMSIG(status));
+                        CASH_DEBUG("Process %ld terminated by signal %d\n",
+                                   (long)pid, WTERMSIG(status));
                     }
                 }
 
@@ -357,10 +412,13 @@ static int mark_process_status(struct Vm *vm, pid_t pid, int status) {
 
 int list_jobs(struct Vm *vm, const struct RawCommand *raw_command) {
     (void)raw_command;  // for now, does nothing; can be extended to handle the
-                        // normal options that can be passed
+    // normal options that can be passed
+    CASH_DEBUG(RED "lets see job list %p (null: %d) in vm %p\n" RESET,
+               (void *)vm->job_list, vm->job_list == NULL, (void *)vm);
     struct Job *job = vm->job_list;
 
     if (job == NULL) {
+        CASH_DEBUG("done\n");
         return 0;
     }
 
@@ -384,7 +442,7 @@ int list_jobs(struct Vm *vm, const struct RawCommand *raw_command) {
 }
 
 int fg(struct Vm *vm, const struct RawCommand *raw_command) {
-    if (!repl_mode) {
+    if (!vm->repl_mode) {
         CASH_ERROR(EXIT_FAILURE,
                    "fg: no job control in non-interactive mode%s\n", "");
         return 1;
@@ -395,18 +453,18 @@ int fg(struct Vm *vm, const struct RawCommand *raw_command) {
     }
 
     int job_id = -1;
-    if (raw_command->args_count > 1) {
+    if (raw_command->as_cmd.args_count > 1) {
         long n;
         char *end;
-        if (raw_command->args[1][0] == '%') {
-            n = strtol(raw_command->args[1] + 1, &end, 10);
+        if (raw_command->as_cmd.args[1][0] == '%') {
+            n = strtol(raw_command->as_cmd.args[1] + 1, &end, 10);
         } else {
-            n = strtol(raw_command->args[1], &end, 10);
+            n = strtol(raw_command->as_cmd.args[1], &end, 10);
         }
 
         if (*end != '\0' || n < 1 || n > INT_MAX) {
             CASH_ERROR(EXIT_FAILURE, "fg: invalid job id `%s`\n",
-                       raw_command->args[1]);
+                       raw_command->as_cmd.args[1]);
             return 1;
         }
         job_id = (int)n;
@@ -415,12 +473,15 @@ int fg(struct Vm *vm, const struct RawCommand *raw_command) {
     struct Job *job = job_id == -1 ? vm->job_list : get_job_by_id(vm, job_id);
     if (job == NULL) {
         CASH_ERROR(EXIT_FAILURE, "fg: no such job `%s`\n",
-                   raw_command->args_count > 1 ? raw_command->args[1] : "");
+                   raw_command->as_cmd.args_count > 1
+                       ? raw_command->as_cmd.args[1]
+                       : "");
         return 1;
     }
 
-    if (repl_mode)
-        printf("%s\n", job->command);
+    if (vm->repl_mode)
+        printf(RED "weeeeeewoooooooooweeeeeeeeeeeewooooooo %s\n" RESET,
+               job->command);
     continue_job(vm, job, true);
     return 0;
 }

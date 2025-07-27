@@ -17,7 +17,7 @@ static bool get_line(struct Repl* repl);
 
 struct Repl make_repl(int argc, char** argv) {
     return (struct Repl){.parser = parser_new("", true),
-                         .vm = make_vm(argc, argv),
+                         .vm = make_vm(argc, argv, true, false),
                          .line = NULL};
 }
 
@@ -40,7 +40,7 @@ void run_repl(struct Repl* repl) {
         if (success) {
 #ifndef NDEBUG
             print_program(&program, 0);
-            printf("\n");
+            CASH_DEBUG("\n");
 #endif
 
             run_program(&repl->vm, &program);
@@ -60,11 +60,22 @@ void free_repl(const struct Repl* repl) {
     free_vm(&repl->vm);
 }
 
+static bool is_empty(const char* line) {
+    while (*line) {
+        if (!isspace((unsigned char)*line)) {
+            return false;
+        }
+        line++;
+    }
+    return true;
+}
+
 static bool get_line(struct Repl* repl) {
     free(repl->line);
     repl->line = readline(repl->vm.current_prompt);
     if (repl->line) {
-        add_history(repl->line);
+        if (!is_empty(repl->line))
+            add_history(repl->line);
         return true;
     }
     return false;
