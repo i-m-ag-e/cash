@@ -1,6 +1,8 @@
 #ifndef CASH_STRING_H
 #define CASH_STRING_H
 
+#include <stdbool.h>
+
 struct Program;
 
 enum StringComponentType {
@@ -46,21 +48,28 @@ struct ShellString make_string(void);
 void add_string_literal(struct ShellString* str, enum StringComponentType type,
                         const char* literal, int length, int escapes);
 void add_string_component(struct ShellString* str,
-                          enum StringComponentType type, const char* value,
-                          int length);
+                          struct StringComponent component);
+void add_string_component_from_value(struct ShellString* str,
+                                     enum StringComponentType type,
+                                     const char* value, int length);
+void add_command_substitution(struct ShellString* str, struct Program* program);
 
 char* grow_string(char* str, int new_size);
 void append(struct String* string, const char* value);
 void append_n(struct String* string, const char* value, int length);
 void append_n_terminate(struct String* string, const char* value, int length);
 
+bool is_null_string(struct ShellString* str);
+struct String strip(const struct String* string);
+
 void free_string_component(const struct StringComponent* component);
 void free_shell_string(const struct ShellString* str);
 void free_string(const struct String* string);
 
 #ifndef NDEBUG
-void print_string(const struct ShellString* string);
-void print_string_component(const struct StringComponent* component);
+void print_string(const struct ShellString* string, int indent);
+void print_string_component(const struct StringComponent* component,
+                            int indent);
 #endif
 
 #endif  // CASH_STRING_H

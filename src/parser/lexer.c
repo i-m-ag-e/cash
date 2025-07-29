@@ -1,6 +1,7 @@
 #include <assert.h>
 #include <cash/error.h>
 #include <cash/parser/lexer.h>
+#include <cash/parser/parser.h>
 #include <cash/parser/token.h>
 #include <ctype.h>
 #include <limits.h>
@@ -10,6 +11,7 @@
 
 #include "cash/ast.h"
 #include "cash/memory.h"
+#include "cash/string.h"
 
 extern bool is_repl_mode;
 
@@ -34,11 +36,12 @@ static void consume_sq_string(struct Lexer* lexer);
 static void consume_dq_string(struct Lexer* lexer);
 static void consume_unquoted_string(struct Lexer* lexer);
 static void consume_substitution(struct Lexer* lexer);
+static void consume_command_substitution(struct Lexer* lexer);
 
 static struct Token lexer_lex(struct Lexer* lexer);
 
 static void lexer_push_token(struct Lexer* lexer, struct Token token);
-static struct Token lexer_pop_token(struct Lexer* lexer);
+// static struct Token lexer_pop_token(struct Lexer* lexer);
 static void lexer_reset_queue(struct Lexer* lexer);
 
 static const bool kPunctuation[128] = {
@@ -91,12 +94,6 @@ void free_lexer(const struct Lexer* lexer) {
 }
 
 struct Token lexer_next_token(struct Lexer* lexer) {
-    if (lexer->repl_mode) {
-        if (lexer->token_queue_size == 0)
-            return make_eof(lexer);
-        const struct Token token = lexer_pop_token(lexer);
-        return token;
-    }
     return lexer_lex(lexer);
 }
 
@@ -388,6 +385,13 @@ static struct Token consume_string(struct Lexer* lexer) {
             break;
     }
     lexer->last_column += lexer->position - lexer->token_start;
+
+    if (lexer->current_string.component_count == 0) {
+        struct StringComponent empty_component = {
+            .type = STRING_COMPONENT_DQ, .literal = strdup(""), .length = 0};
+        add_string_component(&lexer->current_string, empty_component);
+    }
+
     struct Token token = make_token(TOKEN_WORD, lexer);
     token.value.word = lexer->current_string;
     lexer->continue_string = false;
@@ -470,9 +474,15 @@ static void consume_sq_string(struct Lexer* lexer) {
 static void consume_substitution(struct Lexer* lexer) {
     advance(lexer);  // '$'
 
+    if (peek(lexer) == '(') {
+        consume_command_substitution(lexer);
+        return;
+    }
+
     if (peek(lexer) == '?' || peek(lexer) == '#') {
-        add_string_component(&lexer->current_string, STRING_COMPONENT_VAR_SUB,
-                             peek(lexer) == '?' ? "?" : "#", 1);
+        add_string_component_from_value(&lexer->current_string,
+                                        STRING_COMPONENT_VAR_SUB,
+                                        peek(lexer) == '?' ? "?" : "#", 1);
         advance(lexer);
         return;
     }
@@ -487,9 +497,36 @@ static void consume_substitution(struct Lexer* lexer) {
     }
 
     if (lexer->position - name_start != 0)
-        add_string_component(&lexer->current_string, STRING_COMPONENT_VAR_SUB,
-                             &lexer->input[name_start],
-                             lexer->position - name_start);
+        add_string_component_from_value(
+            &lexer->current_string, STRING_COMPONENT_VAR_SUB,
+            &lexer->input[name_start], lexer->position - name_start);
+}
+
+static void consume_command_substitution(struct Lexer* lexer) {
+    struct Parser pseudo_parser = subparser_from_lexer(lexer);
+    struct Program* program = malloc(sizeof(struct Program));
+    if (!program) {
+        CASH_ERROR(EXIT_FAILURE, "Memory allocation failed%s\n", "");
+        lexer->error = true;
+        return;
+    }
+
+    struct ShellString current_string = lexer->current_string;
+    bool continue_string = lexer->continue_string;
+    bool substitution_in_quotes = lexer->substitution_in_quotes;
+
+    lexer->current_string = make_string();
+    lexer->continue_string = false;
+    lexer->substitution_in_quotes = false;
+    if (!parse_subshell(&pseudo_parser, program)) {
+        lexer->error = true;
+        return;
+    }
+    add_command_substitution(&current_string, program);
+    lexer->token_start++;  // skip the ')'
+    lexer->current_string = current_string;
+    lexer->continue_string = continue_string;
+    lexer->substitution_in_quotes = substitution_in_quotes;
 }
 
 static void lexer_push_token(struct Lexer* lexer, struct Token token) {
@@ -497,12 +534,12 @@ static void lexer_push_token(struct Lexer* lexer, struct Token token) {
              struct Token);
 }
 
-static struct Token lexer_pop_token(struct Lexer* lexer) {
-    const struct Token token = lexer->token_queue[lexer->token_queue_head];
-    lexer->token_queue_head++;
-    lexer->token_queue_size--;
-    return token;
-}
+// static struct Token lexer_pop_token(struct Lexer* lexer) {
+//     const struct Token token = lexer->token_queue[lexer->token_queue_head];
+//     lexer->token_queue_head++;
+//     lexer->token_queue_size--;
+//     return token;
+// }
 
 static void lexer_reset_queue(struct Lexer* lexer) {
     lexer->token_queue_head = 0;

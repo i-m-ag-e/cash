@@ -36,9 +36,9 @@ static int make_process_list(struct Vm *vm, struct Expr *expr,
                              struct Process ***process_list);
 static int make_job(struct Vm *vm, struct Expr *expr, struct Job *job);
 
-static struct RawRedirection get_redirection(const struct Vm *vm,
+static struct RawRedirection get_redirection(struct Vm *vm,
                                              const struct Redirection *redir);
-static int get_final_command(const struct Vm *vm, struct Command *command,
+static int get_final_command(struct Vm *vm, struct Command *command,
                              struct RawCommand *raw_command);
 
 static int exec_expression(struct Vm *vm, struct Expr *expr, struct Job **job);
@@ -47,10 +47,15 @@ static void backup_fds(int *saved_in, int *saved_out, int *saved_err);
 static void restore_fds(int saved_in, int saved_out, int saved_err);
 static int run_command(struct Vm *vm, struct Expr *expr, struct Job **job);
 
-static struct String expand_component(const struct Vm *vm,
+static struct String expand_component(struct Vm *vm,
                                       const struct StringComponent *component);
-static struct String to_string(const struct Vm *vm,
-                               const struct ShellString *string);
+static struct String expand_var_sub(const struct Vm *vm,
+                                    const struct StringComponent *component);
+static struct String expand_command_sub(
+    struct Vm *vm, const struct StringComponent *component);
+static struct String expand_string(const struct Vm *vm,
+                                   const struct StringComponent *component);
+static struct String to_string(struct Vm *vm, const struct ShellString *string);
 
 static void update_prompt(struct Vm *vm);
 
@@ -193,7 +198,7 @@ int run_program(struct Vm *vm, const struct Program *program) {
     return vm->previous_exit_code;
 }
 
-static int get_final_command(const struct Vm *vm, struct Command *command,
+static int get_final_command(struct Vm *vm, struct Command *command,
                              struct RawCommand *raw_command) {
     if (command->is_subshell) {
         *raw_command = (struct RawCommand){.is_subshell = true,
@@ -282,7 +287,7 @@ static int get_final_command(const struct Vm *vm, struct Command *command,
     return 0;
 }
 
-static struct RawRedirection get_redirection(const struct Vm *vm,
+static struct RawRedirection get_redirection(struct Vm *vm,
                                              const struct Redirection *redir) {
     struct RawRedirection raw_redir = {
         .left = redir->left,
@@ -540,6 +545,36 @@ static int make_process_list(struct Vm *vm, struct Expr *expr,
     }
 }
 
+static int make_subshell_job(struct Vm *vm, struct Program *program, int in,
+                             int out, int err, struct Job *jobp) {
+    struct Process *process = malloc(sizeof(struct Process));
+    CHECK_ALLOC(process);
+    *process = (struct Process){
+        .next_process = NULL,
+        .raw_command =
+            (struct RawCommand){
+                .is_subshell = true,
+                .as_subshell = *program,
+            },
+        .pid = 0,
+        .status = 0,
+        .completed = false,
+        .stopped = false,
+    };
+    *jobp = (struct Job){
+        .next_job = NULL,
+        .first_process = process,
+        .command = strndup(program->text, program->text_length),
+        .pgid = 0,
+        .notified = false,
+        .term_state = vm->shell_term_state,
+        .stdin = in,
+        .stdout = out,
+        .stderr = err,
+    };
+    return 0;
+}
+
 static int make_job(struct Vm *vm, struct Expr *expr, struct Job *jobp) {
     CASH_DEBUG(RED "expr: ");
     CASH_DEBUG_EXPR(print_expr(expr, 0));
@@ -562,95 +597,124 @@ static int make_job(struct Vm *vm, struct Expr *expr, struct Job *jobp) {
     return 0;
 }
 
-struct String expand_component(const struct Vm *vm,
+struct String expand_component(struct Vm *vm,
                                const struct StringComponent *component) {
-    char *string = NULL;
-
     switch (component->type) {
-        case STRING_COMPONENT_VAR_SUB: {
-            if (component->length == 1 &&
-                component->var_substitution[0] == '?') {
-                return number_to_string(vm->previous_exit_code);
-            }
-
-            if (component->length == 1 &&
-                component->var_substitution[0] == '#') {
-                return number_to_string(vm->argc);
-            }
-
-            int n;
-            if ((n = is_number(component->var_substitution)) != -1) {
-                if (n > vm->argc)
-                    return (struct String){NULL, 0};
-                return (struct String){.string = strdup(vm->argv[n]),
-                                       .length = (int)strlen(vm->argv[n])};
-            }
-
-            const char *value = getenv(component->var_substitution);
-            if (value == NULL) {
-                return (struct String){NULL, 0};
-            }
-            return (struct String){.string = strdup(value),
-                                   .length = (int)strlen(value)};
-        }
+        case STRING_COMPONENT_VAR_SUB:
+            return expand_var_sub(vm, component);
         case STRING_COMPONENT_LITERAL:
-        case STRING_COMPONENT_DQ: {
-            int i, start = 0, total_size = 0;
-
-            if (component->type == STRING_COMPONENT_LITERAL &&
-                component->literal[0] == '~') {
-                start =
-                    tilde_expansion(vm, component->literal, component->length,
-                                    &string, &total_size);
-            }
-
-            for (i = start; i < component->length; ++i) {
-                if (component->literal[i] == '\\') {
-                    if (i + 1 == component->length)
-                        break;
-                    if (component->type == STRING_COMPONENT_LITERAL ||
-                        component->literal[i + 1] == '\\' ||
-                        (component->type == STRING_COMPONENT_DQ &&
-                         kIsEscapableInDQ[(unsigned char)
-                                              component->literal[i + 1]])) {
-                    } else
-                        continue;
-
-                    const int length = i - start + 1;
-                    string = grow_string(string, total_size + length);
-                    strncpy(&string[total_size], &component->literal[start],
-                            length - 1);
-                    string[total_size + length - 1] = component->literal[i + 1];
-                    total_size += length;
-                    start = i + 2;
-                    i++;
-                }
-            }
-            if (start != i) {
-                const int length = i - start;
-                string = grow_string(string, total_size + length);
-                strncpy(&string[total_size], &component->literal[start],
-                        length);
-                total_size += length;
-            }
-
-            return (struct String){string, total_size};
-        }
-
+        case STRING_COMPONENT_DQ:
+            return expand_string(vm, component);
         case STRING_COMPONENT_SQ:
             return (struct String){
                 strndup(component->literal, component->length),
                 component->length};
+        case STRING_COMPONENT_COMMAND_SUBSTITUTION:
+            return expand_command_sub(vm, component);
 
         default:
             return (struct String){.string = "", .length = 0};
     }
 }
 
+static struct String expand_var_sub(const struct Vm *vm,
+                                    const struct StringComponent *component) {
+    if (component->length == 1 && component->var_substitution[0] == '?') {
+        return number_to_string(vm->previous_exit_code);
+    }
+
+    if (component->length == 1 && component->var_substitution[0] == '#') {
+        return number_to_string(vm->argc);
+    }
+
+    int n;
+    if ((n = is_number(component->var_substitution)) != -1) {
+        if (n > vm->argc)
+            return (struct String){NULL, 0};
+        return (struct String){.string = strdup(vm->argv[n]),
+                               .length = (int)strlen(vm->argv[n])};
+    }
+
+    const char *value = getenv(component->var_substitution);
+    if (value == NULL) {
+        return (struct String){NULL, 0};
+    }
+    return (struct String){.string = strdup(value),
+                           .length = (int)strlen(value)};
+}
+
+static struct String expand_string(const struct Vm *vm,
+                                   const struct StringComponent *component) {
+    int i, start = 0, total_size = 0;
+    char *string = NULL;
+
+    if (component->type == STRING_COMPONENT_LITERAL &&
+        component->literal[0] == '~') {
+        start = tilde_expansion(vm, component->literal, component->length,
+                                &string, &total_size);
+    }
+
+    for (i = start; i < component->length; ++i) {
+        if (component->literal[i] == '\\') {
+            if (i + 1 == component->length)
+                break;
+            if (component->type == STRING_COMPONENT_LITERAL ||
+                component->literal[i + 1] == '\\' ||
+                (component->type == STRING_COMPONENT_DQ &&
+                 kIsEscapableInDQ[(unsigned char)component->literal[i + 1]])) {
+            } else
+                continue;
+
+            const int length = i - start + 1;
+            string = grow_string(string, total_size + length);
+            strncpy(&string[total_size], &component->literal[start],
+                    length - 1);
+            string[total_size + length - 1] = component->literal[i + 1];
+            total_size += length;
+            start = i + 2;
+            i++;
+        }
+    }
+    if (start != i) {
+        const int length = i - start;
+        string = grow_string(string, total_size + length);
+        strncpy(&string[total_size], &component->literal[start], length);
+        total_size += length;
+    }
+
+    return (struct String){string, total_size};
+}
+
+static struct String expand_command_sub(
+    struct Vm *vm, const struct StringComponent *component) {
+    struct Job *job = malloc(sizeof(struct Job));
+    CHECK_ALLOC(job);
+
+    int pipefd[2];
+    if (pipe(pipefd) == -1) {
+        CASH_PERROR(EXIT_FAILURE, "pipe", "could not create pipe%s", "");
+        exit(EXIT_FAILURE);
+    }
+
+    make_subshell_job(vm, component->command_substitution, STDIN_FILENO,
+                      pipefd[1], STDERR_FILENO, job);
+    launch_job(vm, job, true);
+    vm->previous_exit_code = job->first_process->status % 0xFF;
+
+    close(pipefd[1]);
+
+    struct String output = read_all_fd(pipefd[0]);
+    close(pipefd[0]);
+
+    struct String stripped = strip(&output);
+    free_string(&output);
+    return stripped;
+}
+
 // TODO: can make expand_component write directly to a single
 // allocated string, instead of allocating a new one for each
 // compoenent and then freeing it
-struct String to_string(const struct Vm *vm, const struct ShellString *string) {
+struct String to_string(struct Vm *vm, const struct ShellString *string) {
     char *str = NULL;
     int total_size = 0;
 

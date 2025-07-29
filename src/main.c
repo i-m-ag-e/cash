@@ -17,7 +17,7 @@ int main(const int argc, char* argv[]) {
     // return 0;
     if (argc == 1) {
         if (!isatty(STDIN_FILENO)) {
-            char* input = read_all_stdin();
+            char* input = read_all_fd(STDIN_FILENO).string;
             run_string(input, 0, argv);
             free(input);
         } else {

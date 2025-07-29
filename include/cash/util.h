@@ -6,7 +6,7 @@
 
 #ifndef NDEBUG
 
-static const char* debug_files[] = {"repl.c", "parser.c"};
+static const char* debug_files[] = {"repl.c", "parser.c", "lexer.c"};
 static const int debug_files_len = sizeof(debug_files) / sizeof(debug_files[0]);
 
 #define CASH_DEBUG(...)                                       \
@@ -37,7 +37,7 @@ static const int debug_files_len = sizeof(debug_files) / sizeof(debug_files[0]);
     } while (0)
 #endif
 
-char* read_all_stdin(void);
+struct String read_all_fd(int fd);
 char* read_file(const char* path);
 
 void run_string(const char* text, int argc, char** argv);
