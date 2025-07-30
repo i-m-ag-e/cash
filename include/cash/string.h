@@ -24,6 +24,8 @@ struct StringComponent {
         struct Program* command_substitution;
     };
 
+    bool quoted;  // used for example when a variable substitution is inside a
+                  // double-quoted string
     int escapes;
     int length;
 };
@@ -51,8 +53,10 @@ void add_string_component(struct ShellString* str,
                           struct StringComponent component);
 void add_string_component_from_value(struct ShellString* str,
                                      enum StringComponentType type,
-                                     const char* value, int length);
-void add_command_substitution(struct ShellString* str, struct Program* program);
+                                     const char* value, int length,
+                                     bool quoted);
+void add_command_substitution(struct ShellString* str, struct Program* program,
+                              bool quoted);
 
 char* grow_string(char* str, int new_size);
 void append(struct String* string, const char* value);
@@ -60,7 +64,7 @@ void append_n(struct String* string, const char* value, int length);
 void append_n_terminate(struct String* string, const char* value, int length);
 
 bool is_null_string(struct ShellString* str);
-struct String strip(const struct String* string);
+struct String strip_end(const struct String* string);
 
 void free_string_component(const struct StringComponent* component);
 void free_shell_string(const struct ShellString* str);

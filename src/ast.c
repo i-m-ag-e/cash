@@ -90,6 +90,7 @@ void free_program(const struct Program *program) {
 #ifndef NDEBUG
 void print_string_component(const struct StringComponent *component,
                             int indent) {
+    const char *quote = component->quoted ? BOLD BLUE "\"" RESET : "";
     switch (component->type) {
         case STRING_COMPONENT_LITERAL:
             fprintf(stderr, MAGENTA "%s" RESET, component->literal);
@@ -101,15 +102,17 @@ void print_string_component(const struct StringComponent *component,
             fprintf(stderr, BOLD CYAN "'%s'" RESET, component->literal);
             break;
         case STRING_COMPONENT_VAR_SUB:
-            fprintf(stderr, GREEN "$%s" RESET, component->var_substitution);
+            fprintf(stderr, "%s" GREEN "$%s" RESET "%s", quote,
+                    component->var_substitution, quote);
             break;
         case STRING_COMPONENT_BRACED_SUB:
-            fprintf(stderr, GREEN "$%s" RESET, component->braced_substitution);
+            fprintf(stderr, "%s" GREEN "$%s" RESET "%s", quote,
+                    component->braced_substitution, quote);
             break;
         case STRING_COMPONENT_COMMAND_SUBSTITUTION:
-            fprintf(stderr, GREEN "$(" RESET);
+            fprintf(stderr, "%s" GREEN "$(" RESET, quote);
             print_program(component->command_substitution, indent + 1);
-            fprintf(stderr, GREEN ")" RESET);
+            fprintf(stderr, GREEN ")" RESET "%s", quote);
             break;
     }
 }

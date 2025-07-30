@@ -22,11 +22,13 @@ void add_string_literal(struct ShellString *str, enum StringComponentType type,
     assert(type == STRING_COMPONENT_LITERAL || type == STRING_COMPONENT_DQ ||
            type == STRING_COMPONENT_SQ);
     if (length > 0) {
-        add_string_component(
-            str, (struct StringComponent){.literal = strndup(literal, length),
-                                          .type = type,
-                                          .length = length,
-                                          .escapes = escapes});
+        add_string_component(str, (struct StringComponent){
+                                      .literal = strndup(literal, length),
+                                      .type = type,
+                                      .length = length,
+                                      .quoted = type == STRING_COMPONENT_DQ ||
+                                                type == STRING_COMPONENT_SQ,
+                                      .escapes = escapes});
     }
 }
 
@@ -38,10 +40,10 @@ void add_string_component(struct ShellString *str,
 
 void add_string_component_from_value(struct ShellString *str,
                                      enum StringComponentType type,
-                                     const char *value, int length) {
+                                     const char *value, int length,
+                                     bool quoted) {
     assert(type == STRING_COMPONENT_BRACED_SUB ||
-           type == STRING_COMPONENT_VAR_SUB ||
-           type == STRING_COMPONENT_COMMAND_SUBSTITUTION);
+           type == STRING_COMPONENT_VAR_SUB);
     char *val = strndup(value, length);
 
     if (length <= 0)
@@ -54,6 +56,7 @@ void add_string_component_from_value(struct ShellString *str,
                 .type = type,
                 .length = length,
                 .braced_substitution = val,
+                .quoted = quoted,
             };
             break;
         }
@@ -62,6 +65,7 @@ void add_string_component_from_value(struct ShellString *str,
                 .type = type,
                 .length = length,
                 .var_substitution = val,
+                .quoted = quoted,
             };
             break;
         }
@@ -69,7 +73,8 @@ void add_string_component_from_value(struct ShellString *str,
             component = (struct StringComponent){
                 .type = STRING_COMPONENT_COMMAND_SUBSTITUTION,
                 .length = length,
-                .command_substitution = NULL};
+                .command_substitution = NULL,
+                .quoted = quoted};
             break;
         }
     }
@@ -77,13 +82,14 @@ void add_string_component_from_value(struct ShellString *str,
     add_string_component(str, component);
 }
 
-void add_command_substitution(struct ShellString *str,
-                              struct Program *program) {
+void add_command_substitution(struct ShellString *str, struct Program *program,
+                              bool quoted) {
     assert(program != NULL);
     add_string_component(str, (struct StringComponent){
                                   .type = STRING_COMPONENT_COMMAND_SUBSTITUTION,
                                   .length = 0,
-                                  .command_substitution = program});
+                                  .command_substitution = program,
+                                  .quoted = quoted});
 }
 
 void free_string_component(const struct StringComponent *component) {
@@ -131,9 +137,13 @@ void append(struct String *string, const char *value) {
 }
 
 void append_n(struct String *string, const char *value, int length) {
-    string->string = grow_string(string->string, string->length + length);
+    if (length <= 0)
+        return;
+
+    string->string = grow_string(string->string, string->length + length + 1);
     memcpy(&string->string[string->length], value, length);
     string->length += length;
+    string->string[string->length] = '\0';  // Null-terminate the string
 }
 
 void append_n_terminate(struct String *string, const char *value, int length) {
@@ -147,21 +157,14 @@ bool is_null_string(struct ShellString *str) {
             str->components[0].type != STRING_COMPONENT_COMMAND_SUBSTITUTION);
 }
 
-struct String strip(const struct String *string) {
+struct String strip_end(const struct String *string) {
     int length = string->length;
-    int start = 0;
-
-    while (start < string->length && isspace(string->string[start])) {
-        start++;
-        length--;
-    }
-
     int end = string->length - 1;
-    while (end >= start && isspace(string->string[end])) {
+    while (end >= 0 && isspace(string->string[end])) {
         end--;
         length--;
     }
 
-    return (struct String){.string = strndup(&string->string[start], length),
+    return (struct String){.string = strndup(string->string, length),
                            .length = length};
 }

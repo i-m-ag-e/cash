@@ -480,9 +480,9 @@ static void consume_substitution(struct Lexer* lexer) {
     }
 
     if (peek(lexer) == '?' || peek(lexer) == '#') {
-        add_string_component_from_value(&lexer->current_string,
-                                        STRING_COMPONENT_VAR_SUB,
-                                        peek(lexer) == '?' ? "?" : "#", 1);
+        add_string_component_from_value(
+            &lexer->current_string, STRING_COMPONENT_VAR_SUB,
+            peek(lexer) == '?' ? "?" : "#", 1, lexer->substitution_in_quotes);
         advance(lexer);
         return;
     }
@@ -499,7 +499,8 @@ static void consume_substitution(struct Lexer* lexer) {
     if (lexer->position - name_start != 0)
         add_string_component_from_value(
             &lexer->current_string, STRING_COMPONENT_VAR_SUB,
-            &lexer->input[name_start], lexer->position - name_start);
+            &lexer->input[name_start], lexer->position - name_start,
+            lexer->substitution_in_quotes);
 }
 
 static void consume_command_substitution(struct Lexer* lexer) {
@@ -522,7 +523,7 @@ static void consume_command_substitution(struct Lexer* lexer) {
         lexer->error = true;
         return;
     }
-    add_command_substitution(&current_string, program);
+    add_command_substitution(&current_string, program, substitution_in_quotes);
     lexer->token_start++;  // skip the ')'
     lexer->current_string = current_string;
     lexer->continue_string = continue_string;
