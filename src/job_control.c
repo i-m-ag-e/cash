@@ -480,8 +480,7 @@ int fg(struct Vm *vm, const struct RawCommand *raw_command) {
     }
 
     if (vm->repl_mode)
-        printf(RED "weeeeeewoooooooooweeeeeeeeeeeewooooooo %s\n" RESET,
-               job->command);
+        printf("%s\n", job->command);
     continue_job(vm, job, true);
     return 0;
 }

@@ -205,7 +205,6 @@ static int get_final_command(struct Vm *vm, struct Command *command,
                                            .as_subshell = command->as_subshell};
     } else {
         char *executable = NULL;
-        char **args = NULL;
         struct WordList word_list = {
             .words = NULL, .word_count = 0, .word_capacity = 0};
 
