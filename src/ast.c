@@ -88,7 +88,9 @@ void free_program(const struct Program *program) {
 }
 
 #ifndef NDEBUG
-void print_string_component(const struct StringComponent *component) {
+void print_string_component(const struct StringComponent *component,
+                            int indent) {
+    const char *quote = component->quoted ? BOLD BLUE "\"" RESET : "";
     switch (component->type) {
         case STRING_COMPONENT_LITERAL:
             fprintf(stderr, MAGENTA "%s" RESET, component->literal);
@@ -100,20 +102,24 @@ void print_string_component(const struct StringComponent *component) {
             fprintf(stderr, BOLD CYAN "'%s'" RESET, component->literal);
             break;
         case STRING_COMPONENT_VAR_SUB:
-            fprintf(stderr, GREEN "$%s" RESET, component->var_substitution);
+            fprintf(stderr, "%s" GREEN "$%s" RESET "%s", quote,
+                    component->var_substitution, quote);
             break;
         case STRING_COMPONENT_BRACED_SUB:
-            fprintf(stderr, GREEN "$%s" RESET, component->braced_substitution);
+            fprintf(stderr, "%s" GREEN "$%s" RESET "%s", quote,
+                    component->braced_substitution, quote);
             break;
         case STRING_COMPONENT_COMMAND_SUBSTITUTION:
-            fprintf(stderr, "command sub");
+            fprintf(stderr, "%s" GREEN "$(" RESET, quote);
+            print_program(component->command_substitution, indent + 1);
+            fprintf(stderr, GREEN ")" RESET "%s", quote);
             break;
     }
 }
 
-void print_string(const struct ShellString *string) {
+void print_string(const struct ShellString *string, int indent) {
     for (int i = 0; i < string->component_count; ++i)
-        print_string_component(&string->components[i]);
+        print_string_component(&string->components[i], indent);
 }
 
 void print_program(const struct Program *program, int indent) {
@@ -170,24 +176,24 @@ void print_command(const struct Command *command, int indent) {
     } else {
         fprintf(stderr, "Command(<args: %d> " BOLD CYAN,
                 command->as_cmd.arguments.argument_count);
-        print_string(&command->as_cmd.command_name);
+        print_string(&command->as_cmd.command_name, indent + 1);
         fprintf(stderr, "%s" RESET,
                 command->as_cmd.arguments.argument_count ? " " : "");
 
         for (int i = 0; i < command->as_cmd.arguments.argument_count; ++i) {
-            print_string(&command->as_cmd.arguments.arguments[i]);
+            print_string(&command->as_cmd.arguments.arguments[i], indent + 1);
             fprintf(stderr, " ");
         }
     }
 
     for (int i = 0; i < command->redirection_count; ++i) {
-        print_redirection(&command->redirections[i]);
+        print_redirection(&command->redirections[i], indent + 1);
         fprintf(stderr, " ");
     }
     fprintf(stderr, ")");
 }
 
-void print_redirection(const struct Redirection *redirection) {
+void print_redirection(const struct Redirection *redirection, int indent) {
     fprintf(stderr, "( ");
     if (redirection->left != -1) {
         fprintf(stderr, CYAN "%d" RESET, redirection->left);
@@ -221,7 +227,7 @@ void print_redirection(const struct Redirection *redirection) {
         fprintf(stderr, CYAN "%d" RESET, redirection->right);
     } else {
         fprintf(stderr, " ");
-        print_string(&redirection->file_name);
+        print_string(&redirection->file_name, indent);
     }
     fprintf(stderr, " )");
 }

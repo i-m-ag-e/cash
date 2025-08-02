@@ -92,7 +92,7 @@ void print_program(const struct Program* program, int indent);
 void print_statement(const struct Stmt* stmt, int indent);
 void print_expr(const struct Expr* expr, int indent);
 void print_command(const struct Command* command, int indent);
-void print_redirection(const struct Redirection* redirection);
+void print_redirection(const struct Redirection* redirection, int indent);
 #endif
 
 #endif  // CASH_AST_H

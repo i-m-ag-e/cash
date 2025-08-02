@@ -84,9 +84,9 @@ struct String number_to_string(int number) {
     return (struct String){.string = buf, .length = length};
 }
 
-char *read_all_stdin(void) {
-    size_t size = 0;
-    size_t capacity = 1024;
+struct String read_all_fd(int fd) {
+    int size = 0;
+    int capacity = 1024;
     char *buffer = malloc(capacity);
     if (!buffer) {
         CASH_ERROR(EXIT_FAILURE,
@@ -94,8 +94,14 @@ char *read_all_stdin(void) {
         exit(EXIT_FAILURE);
     }
 
-    size_t n;
-    while ((n = fread(buffer + size, 1, capacity - size - 1, stdin)) > 0) {
+    int n;
+    while ((n = read(fd, buffer + size, capacity - size - 1)) > 0) {
+        if (n == -1) {
+            CASH_PERROR(EXIT_FAILURE, "read",
+                        "error while reading from file descriptor %d", fd);
+            free(buffer);
+            exit(EXIT_FAILURE);
+        }
         size += n;
         if (size == capacity - 1) {
             capacity *= 2;
@@ -111,7 +117,7 @@ char *read_all_stdin(void) {
     }
 
     buffer[size] = '\0';
-    return buffer;
+    return (struct String){.string = buffer, .length = size};
 }
 
 char *read_file(const char *path) {

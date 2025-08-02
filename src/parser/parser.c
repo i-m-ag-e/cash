@@ -9,6 +9,7 @@
 #include "cash/ast.h"
 #include "cash/error.h"
 #include "cash/memory.h"
+#include "cash/string.h"
 #include "cash/util.h"
 
 #define ALLOC_CHECKED(ptr, size)                                          \
@@ -30,8 +31,6 @@
 
 extern bool is_repl_mode;
 
-static struct Parser make_subparser(const struct Parser* parser);
-
 static bool is_at_end(const struct Parser* parser);
 static struct Token peek(const struct Parser* parser);
 static enum TokenType peek_tt(const struct Parser* parser);
@@ -40,7 +39,6 @@ static struct Token advance(struct Parser* parser);
 static bool match(struct Parser* parser, enum TokenType type);
 static struct Token consume(enum TokenType type, struct Parser* parser);
 
-static bool parse_subshell(struct Parser* parser, struct Program* program);
 static bool parse_terminal(struct Parser* parser, struct Expr* expr);
 static bool parse_not_expr(struct Parser* parser, struct Expr* expr);
 static bool parse_pipeline(struct Parser* parser, struct Expr* expr);
@@ -57,7 +55,22 @@ struct Parser parser_new(const char* input, bool repl_mode) {
                                   .input = input,
                                   .program = make_program(),
                                   .error = false,
-                                  .is_subparser = false};
+                                  .is_subparser = false,
+                                  .is_command_sub_parser = false};
+    return parser;
+}
+
+// used for command substitutions only
+// if this ever changes, .is_command_sub_parser should be set to false and then
+// manually set when parsing a command substitution
+struct Parser subparser_from_lexer(struct Lexer* lexer) {
+    struct Parser parser = {.lexer = lexer,
+                            .input = lexer->input,
+                            .program = make_program(),
+                            .error = false,
+                            .is_subparser = true,
+                            .is_command_sub_parser = true};
+    parser.current_token = lexer_next_token(lexer);
     return parser;
 }
 
@@ -76,7 +89,6 @@ void free_parser(const struct Parser* parser) {
 bool parse_program(struct Parser* parser) {
     if (!parser->is_subparser) {
         parser->current_token = lexer_next_token(parser->lexer);
-        parser->next_token = lexer_next_token(parser->lexer);
     }
     while (peek_tt(parser) != TOKEN_EOF) {
         if (parser->error) {
@@ -96,7 +108,7 @@ bool parse_program(struct Parser* parser) {
     return true;
 }
 
-static struct Parser make_subparser(const struct Parser* parser) {
+struct Parser make_subparser(const struct Parser* parser) {
     struct Parser subparser = *parser;
     subparser.is_subparser = true;
     subparser.program = make_program();
@@ -251,7 +263,7 @@ static bool parse_terminal(struct Parser* parser, struct Expr* expr) {
     return parse_command(parser, expr);
 }
 
-static bool parse_subshell(struct Parser* parser, struct Program* program) {
+bool parse_subshell(struct Parser* parser, struct Program* program) {
     const char* begin = advance(parser).lexeme;
     struct Parser subparser = make_subparser(parser);
 
@@ -261,9 +273,24 @@ static bool parse_subshell(struct Parser* parser, struct Program* program) {
     }
 
     parser->current_token = subparser.current_token;
-    parser->next_token = subparser.next_token;
 
-    const struct Token rparen = consume(TOKEN_RPAREN, parser);
+    struct Token rparen;
+    if (parser->is_command_sub_parser) {
+        // do not consume, it will cause problems with a quoted command
+        // substitution for example, "echo $(echo 'hello world') abcd" after ')'
+        // is parsed, consume will "advance" and ask for the next token next
+        // token will see a single '"' and error out, it has no way to know that
+        // there wasd a quote before
+        rparen = peek(parser);
+        if (rparen.type != TOKEN_RPAREN) {
+            CASH_ERROR(EXIT_FAILURE, "Expected `)`, found `%s`\n",
+                       token_type_to_string(rparen.type));
+            parser->error = true;
+            return false;
+        }
+    } else {
+        rparen = consume(TOKEN_RPAREN, parser);
+    }
     const char* end = rparen.lexeme + rparen.lexeme_length;
 
     if (parser->error)
@@ -308,7 +335,7 @@ static bool parse_command(struct Parser* parser, struct Expr* expr) {
         switch (next.type) {
             case TOKEN_WORD: {
                 if (command.is_subshell) {
-                    CASH_ERROR(EXIT_FAILURE, "unexpected token `%.*s`",
+                    CASH_ERROR(EXIT_FAILURE, "unexpected token `%.*s`\n",
                                next.lexeme_length, next.lexeme);
                     parser->error = true;
                     return false;
@@ -318,6 +345,9 @@ static bool parse_command(struct Parser* parser, struct Expr* expr) {
                     command.as_cmd.command_name = advance(parser).value.word;
                 } else {
                     const struct Token argument = advance(parser);
+                    CASH_DEBUG("adding argument ");
+                    CASH_DEBUG_EXPR(print_string(&argument.value.word, 0));
+                    CASH_DEBUG("\n");
                     add_argument(&command.as_cmd.arguments,
                                  argument.value.word);
                 }
@@ -327,6 +357,12 @@ static bool parse_command(struct Parser* parser, struct Expr* expr) {
             case TOKEN_RPAREN:
                 if (parser->is_subparser)
                     break_out = true;
+                else {
+                    CASH_ERROR(EXIT_FAILURE, "unexpected token `%.*s`\n",
+                               next.lexeme_length, next.lexeme);
+                    parser->error = true;
+                    return false;
+                }
                 continue;
 
             case TOKEN_PIPE:
@@ -346,9 +382,10 @@ static bool parse_command(struct Parser* parser, struct Expr* expr) {
                 parser->error = true;
                 return false;
             default:
-                CASH_ERROR(EXIT_FAILURE, "unexpected token `%.*s`",
+                CASH_ERROR(EXIT_FAILURE, "unexpected token `%.*s`\n",
                            next.lexeme_length, next.lexeme);
-                exit(EXIT_FAILURE);
+                parser->error = true;
+                return false;
         }
     }
 
@@ -430,8 +467,7 @@ static struct Token advance(struct Parser* parser) {
     if (parser->current_token.type == TOKEN_ERROR)
         parser->error = true;
     if (!is_at_end(parser)) {
-        parser->current_token = parser->next_token;
-        parser->next_token = lexer_next_token(parser->lexer);
+        parser->current_token = lexer_next_token(parser->lexer);
     }
 
 #ifndef NDEBUG

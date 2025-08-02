@@ -8,15 +8,18 @@
 struct Parser {
     struct Lexer* lexer;
     struct Token current_token;
-    struct Token next_token;
 
     const char* input;
     struct Program program;
     bool error;
     bool is_subparser;
+    bool is_command_sub_parser;
 };
 
 struct Parser parser_new(const char* input, bool repl_mode);
+struct Parser subparser_from_lexer(struct Lexer* lexer);
+struct Parser make_subparser(const struct Parser* parser);
+bool parse_subshell(struct Parser* parser, struct Program* program);
 void reset_parser(const char* input, struct Parser* parser);
 void free_parser(const struct Parser* parser);
 
