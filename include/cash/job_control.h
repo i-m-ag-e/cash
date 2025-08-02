@@ -17,9 +17,17 @@ struct RawRedirection {
 };
 
 struct RawCommand {
-    char *name;
-    char **args;
-    int args_count;
+    bool is_subshell;
+
+    union {
+        struct {
+            char *name;
+            char **args;
+            int args_count;
+        } as_cmd;
+        struct Program as_subshell;
+    };
+
     struct RawRedirection *redirs;
     int redirs_count;
 };
@@ -67,9 +75,11 @@ void do_job_notification(struct Vm *vm);
 int list_jobs(struct Vm *vm, const struct RawCommand *raw_command);
 int fg(struct Vm *vm, const struct RawCommand *raw_command);
 
+void setup_redirections(struct RawCommand *raw_command);
 void launch_process(struct Vm *vm, struct Process *process, pid_t pgid,
                     pid_t pid, int in, int out, int err, bool foreground);
 void launch_job(struct Vm *vm, struct Job *job, bool foreground);
+void put_job_in_foreground(struct Vm *vm, struct Job *job, bool cont);
 
 void format_job_info(struct Job *job, const char *state, FILE *stream);
 

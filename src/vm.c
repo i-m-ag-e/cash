@@ -27,23 +27,25 @@
         }                                                                 \
     } while (0)
 
-extern bool repl_mode;
+extern bool is_repl_mode;
 extern char **environ;
 
-static void make_process(struct Vm *vm, const struct Command *command,
+static void make_process(struct Vm *vm, struct Command *command,
                          struct Process *process);
-static int make_process_list(struct Vm *vm, const struct Expr *expr,
+static int make_process_list(struct Vm *vm, struct Expr *expr,
                              struct Process ***process_list);
-static int make_job(struct Vm *vm, const struct Expr *expr, struct Job *job);
+static int make_job(struct Vm *vm, struct Expr *expr, struct Job *job);
 
 static struct RawRedirection get_redirection(const struct Vm *vm,
                                              const struct Redirection *redir);
-static int get_final_command(const struct Vm *vm, const struct Command *command,
+static int get_final_command(const struct Vm *vm, struct Command *command,
                              struct RawCommand *raw_command);
 
-static int exec_expression(struct Vm *vm, struct Expr *expr);
-static int run_command(struct Vm *vm, struct Expr *expr);
-static int run_subshell(struct Vm *vm, struct Program *program);
+static int exec_expression(struct Vm *vm, struct Expr *expr, struct Job **job);
+
+static void backup_fds(int *saved_in, int *saved_out, int *saved_err);
+static void restore_fds(int saved_in, int saved_out, int saved_err);
+static int run_command(struct Vm *vm, struct Expr *expr, struct Job **job);
 
 static struct String expand_component(const struct Vm *vm,
                                       const struct StringComponent *component);
@@ -74,34 +76,44 @@ const char *BUILTIN_NAMES[] = {"cd", "exit", "jobs", "fg"};
 const BuiltinFunc BUILTIN_FUNCS[] = {change_dir, exit_shell, list_jobs, fg};
 const int BUILTIN_COUNT = sizeof(BUILTIN_NAMES) / sizeof(BUILTIN_NAMES[0]);
 
-struct Vm make_vm(int argc, char **argv) {
+static void handle_signal(int sig) {
+    CASH_DEBUG(RED "yo %d (%s) (pid: %d) (control with: %d)\n" RESET, sig,
+               strsignal(sig), getpid(), tcgetpgrp(STDIN_FILENO));
+    signal(sig, SIG_IGN);
+}
+
+struct Vm make_vm(int argc, char **argv, bool repl_mode, bool background) {
     struct passwd *userpw = getpwuid(getuid());
     char *cwd = get_cwd();
 
-    pid_t shell_pgid;
+    pid_t shell_pgid = 0;
+    struct termios term_state = {0};
+    // assert(!background || !repl_mode);
     if (repl_mode) {
         while (tcgetpgrp(STDIN_FILENO) != (shell_pgid = getpgrp())) {
             kill(-shell_pgid, SIGTTIN);
         }
+
+        signal(SIGINT, handle_signal);
+        signal(SIGQUIT, handle_signal);
+        signal(SIGTTOU, handle_signal);
+        signal(SIGSTOP, handle_signal);
+        signal(SIGTSTP, handle_signal);
+        signal(SIGTTIN, handle_signal);
+        signal(SIGCHLD, SIG_DFL);
+
+        shell_pgid = getpid();
+        if (setpgid(shell_pgid, shell_pgid) == -1) {
+            CASH_PERROR(EXIT_FAILURE, "setpgid",
+                        "could not set process group id%s", "");
+            exit(EXIT_FAILURE);
+        }
+
+        if (!background) {
+            tcsetpgrp(STDIN_FILENO, shell_pgid);
+        }
+        tcgetattr(STDIN_FILENO, &term_state);
     }
-
-    signal(SIGINT, SIG_IGN);
-    signal(SIGQUIT, SIG_IGN);
-    signal(SIGTTOU, SIG_IGN);
-    signal(SIGTSTP, SIG_IGN);
-    signal(SIGTTIN, SIG_IGN);
-    signal(SIGCHLD, SIG_DFL);
-
-    shell_pgid = getpid();
-    if (setpgid(shell_pgid, shell_pgid) == -1) {
-        CASH_PERROR(EXIT_FAILURE, "setpgid", "could not set process group id%s",
-                    "");
-        exit(EXIT_FAILURE);
-    }
-
-    tcsetpgrp(STDIN_FILENO, shell_pgid);
-    struct termios term_state;
-    tcgetattr(STDIN_FILENO, &term_state);
 
     setenv("PWD", cwd, 1);
     setenv("OLDPWD", cwd, 1);
@@ -118,6 +130,7 @@ struct Vm make_vm(int argc, char **argv) {
         .repl_mode = repl_mode,
         .shell_pgid = shell_pgid,
         .shell_term_state = term_state,
+        .is_subshell = false,
 
         .argc = argc,
         .argv = argv,
@@ -137,10 +150,42 @@ void free_vm(const struct Vm *vm) {
 }
 
 int run_program(struct Vm *vm, const struct Program *program) {
+    CASH_DEBUG(YELLOW "running program in vm %p (pid: %d)" RESET, (void *)vm,
+               getpid());
+    CASH_DEBUG_EXPR(print_program(program, 0));
+    CASH_DEBUG("\n");
+
     for (int i = 0; i < program->statement_count; ++i) {
-        exec_expression(vm, &program->statements[i].expr);
+        struct Job *job = NULL;
+
+        CASH_DEBUG("expr %d", i);
+        CASH_DEBUG_EXPR(print_expr(&program->statements[i].expr, 0));
+        CASH_DEBUG("\n");
+        int res = exec_expression(vm, &program->statements[i].expr, &job);
+        CASH_DEBUG("expr has been execed with %d\n", res);
+
+        if (vm->is_subshell) {
+            if (vm->job_list != job)
+                continue;
+            // while (!job_is_completed(job) && job_is_stopped(job)) {
+            //     CASH_DEBUG(RED "sombody help me\n" RESET);
+            //     kill(-vm->shell_pgid, SIGSTOP);
+            //     put_job_in_foreground(vm, job, true);
+            //     CASH_DEBUG(RED "aaaaaaaaaaaaaaah\n" RESET);
+            //     do_job_notification(vm);
+            //     break;
+            // }
+        }
+
+        if (i + 1 < program->statement_count) {
+            CASH_DEBUG("next one is %d (exit: %d)\n", i + 1, vm->exit);
+            CASH_DEBUG_EXPR(print_expr(&program->statements[i + 1].expr, 0));
+            CASH_DEBUG("\n");
+        }
         // run_command(vm, &program->statements[i].command);
     }
+    if (vm->is_subshell)
+        exit(vm->previous_exit_code);
 
     if (!vm->notified_this_time)
         do_job_notification(vm);
@@ -148,53 +193,79 @@ int run_program(struct Vm *vm, const struct Program *program) {
     return vm->previous_exit_code;
 }
 
-static int get_final_command(const struct Vm *vm, const struct Command *command,
+static int get_final_command(const struct Vm *vm, struct Command *command,
                              struct RawCommand *raw_command) {
-    char *executable = NULL;
-    char **args = NULL;
-    if (command->command_name.component_count != 0) {
-        const struct String command_name =
-            to_string(vm, &command->command_name);
+    if (command->is_subshell) {
+        *raw_command = (struct RawCommand){.is_subshell = true,
+                                           .as_subshell = command->as_subshell};
+    } else {
+        char *executable = NULL;
+        char **args = NULL;
 
-        CASH_DEBUG("Name: %s\n", command_name.string);
-        args = malloc((command->arguments.argument_count + 2) * sizeof(*args));
-        if (!args) {
-            CASH_ERROR(EXIT_FAILURE,
-                       "could not allocate memory for arguments%s\n", "");
-            exit(EXIT_FAILURE);
-        }
+        if (command->as_cmd.command_name.component_count != 0) {
+            const struct String command_name =
+                to_string(vm, &command->as_cmd.command_name);
+            CASH_DEBUG("Name: %s\n", command_name.string);
 
-        args[0] = strndup(command_name.string, command_name.length);
-        CASH_DEBUG("arg 0: (len %d) %s\n", command_name.length, args[0]);
-
-        for (int i = 0; i < command->arguments.argument_count; ++i) {
-            const struct String arg =
-                to_string(vm, &command->arguments.arguments[i]);
-            CASH_DEBUG("arg %d: (len %d) %s\n", i + 1, arg.length, arg.string);
-
-            args[i + 1] = arg.string;
-        }
-        args[command->arguments.argument_count + 1] = NULL;
-        CASH_DEBUG("-----------------\n");
-
-        if (is_path(command_name.string)) {
-            if (!is_executable(command_name.string)) {
-                CASH_ERROR(EXIT_FAILURE, "the path `%s` is not an executable\n",
-                           command_name.string);
-                free_string(&command_name);
-                return EXIT_FAILURE;
+            if (strcmp(command_name.string, "ls") == 0) {
+                struct ShellString new_arg = {.components = NULL,
+                                              .component_count = 0,
+                                              .component_capacity = 0};
+                add_string_literal(&new_arg, STRING_COMPONENT_LITERAL,
+                                   "--color=auto", strlen("--color=auto"), 0);
+                add_argument(&command->as_cmd.arguments, new_arg);
             }
-            executable = strndup(command_name.string, command_name.length);
-        } else {
-            char *res = find_in_path(command_name.string);
-            if (res == NULL) {
+
+            args = malloc((command->as_cmd.arguments.argument_count + 2) *
+                          sizeof(*args));
+            if (!args) {
+                CASH_ERROR(EXIT_FAILURE,
+                           "could not allocate memory for arguments%s\n", "");
+                exit(EXIT_FAILURE);
+            }
+
+            args[0] = strndup(command_name.string, command_name.length);
+            CASH_DEBUG("arg 0: (len %d) %s\n", command_name.length, args[0]);
+
+            for (int i = 0; i < command->as_cmd.arguments.argument_count; ++i) {
+                const struct String arg =
+                    to_string(vm, &command->as_cmd.arguments.arguments[i]);
+                CASH_DEBUG("arg %d: (len %d) %s\n", i + 1, arg.length,
+                           arg.string);
+
+                args[i + 1] = arg.string;
+            }
+            args[command->as_cmd.arguments.argument_count + 1] = NULL;
+            CASH_DEBUG("-----------------\n");
+
+            if (is_path(command_name.string)) {
+                if (!is_executable(command_name.string)) {
+                    CASH_ERROR(EXIT_FAILURE,
+                               "the path `%s` is not an executable\n",
+                               command_name.string);
+                    free_string(&command_name);
+                    return EXIT_FAILURE;
+                }
                 executable = strndup(command_name.string, command_name.length);
             } else {
-                executable = res;
+                char *res = find_in_path(command_name.string);
+                if (res == NULL) {
+                    executable =
+                        strndup(command_name.string, command_name.length);
+                } else {
+                    executable = res;
+                }
             }
+
+            free_string(&command_name);
         }
 
-        free_string(&command_name);
+        *raw_command = (struct RawCommand){
+            .is_subshell = false,
+            .as_cmd = {
+                .name = executable,
+                .args = args,
+                .args_count = command->as_cmd.arguments.argument_count + 1}};
     }
 
     struct RawRedirection *redirs =
@@ -205,12 +276,8 @@ static int get_final_command(const struct Vm *vm, const struct Command *command,
         redirs[i] = get_redirection(vm, redir);
     }
 
-    *raw_command =
-        (struct RawCommand){.name = executable,
-                            .args = args,
-                            .args_count = command->arguments.argument_count + 1,
-                            .redirs_count = command->redirection_count,
-                            .redirs = redirs};
+    raw_command->redirs_count = command->redirection_count;
+    raw_command->redirs = redirs;
 
     return 0;
 }
@@ -273,92 +340,104 @@ static struct RawRedirection get_redirection(const struct Vm *vm,
     return raw_redir;
 }
 
-int run_command(struct Vm *vm, struct Expr *expr) {
-    if (!repl_mode)
-        remove_completed_jobs(vm);
-    struct Command *command = &expr->command;
+static void backup_fds(int *saved_in, int *saved_out, int *saved_err) {
+    *saved_in = dup(STDIN_FILENO);
+    if (*saved_in == -1) {
+        CASH_PERROR(EXIT_FAILURE, "dup", "could not duplicate stdin%s", "");
+        exit(EXIT_FAILURE);
+    }
+    *saved_out = dup(STDOUT_FILENO);
+    if (*saved_out == -1) {
+        CASH_PERROR(EXIT_FAILURE, "dup", "could not duplicate stdout%s", "");
+        exit(EXIT_FAILURE);
+    }
+    *saved_err = dup(STDERR_FILENO);
+    if (*saved_err == -1) {
+        CASH_PERROR(EXIT_FAILURE, "dup", "could not duplicate stderr%s", "");
+        exit(EXIT_FAILURE);
+    }
+}
 
-    struct RawCommand raw_command;
-    const int command_expansion = get_final_command(vm, command, &raw_command);
-    if (command_expansion != 0) {
-        free_raw_command(&raw_command);
-        return command_expansion;
+static void restore_fds(int saved_in, int saved_out, int saved_err) {
+    if (dup2(saved_in, STDIN_FILENO) == -1) {
+        CASH_PERROR(EXIT_FAILURE, "dup2", "could not restore stdin%s", "");
+        exit(EXIT_FAILURE);
+    }
+    if (dup2(saved_out, STDOUT_FILENO) == -1) {
+        CASH_PERROR(EXIT_FAILURE, "dup2", "could not restore stdout%s", "");
+        exit(EXIT_FAILURE);
+    }
+    if (dup2(saved_err, STDERR_FILENO) == -1) {
+        CASH_PERROR(EXIT_FAILURE, "dup2", "could not restore stderr%s", "");
+        exit(EXIT_FAILURE);
     }
 
-    if (raw_command.name == NULL) {
-        if (raw_command.redirs_count == 0) {
-            free_raw_command(&raw_command);
-            return vm->previous_exit_code;
+    close(saved_in);
+    close(saved_out);
+    close(saved_err);
+}
+
+int run_command(struct Vm *vm, struct Expr *expr, struct Job **jobp) {
+    if (!vm->repl_mode)
+        remove_completed_jobs(vm);
+
+    CASH_DEBUG(BLUE "running command ");
+    CASH_DEBUG_EXPR(print_expr(expr, 0));
+    CASH_DEBUG("\n");
+
+    struct Job *job = malloc(sizeof(struct Job));
+    CHECK_ALLOC(job);
+    make_job(vm, expr, job);
+    *jobp = job;
+    assert(job->first_process->next_process == NULL);
+    for (struct Process *process = job->first_process; process != NULL;
+         process = process->next_process) {
+        if (process->raw_command.is_subshell) {
+            CASH_DEBUG("subshell command: %s\n",
+                       process->raw_command.as_subshell.text);
         } else {
-            raw_command.name = strdup("/bin/true");
-            raw_command.args = malloc(2 * sizeof(char *));
-            CHECK_ALLOC(raw_command.args);
-            raw_command.args[0] = strdup("true");
-            raw_command.args[1] = NULL;
-            raw_command.args_count = 1;
+            CASH_DEBUG("command: %s\n", process->raw_command.as_cmd.name);
+            CASH_DEBUG("proc: %s\n", process->raw_command.as_cmd.name);
+            for (int i = 0; i < process->raw_command.as_cmd.args_count; ++i) {
+                CASH_DEBUG("\tArg %d: %s\n", i,
+                           process->raw_command.as_cmd.args[i]);
+            }
         }
     }
 
-    int builtin = is_builtin(raw_command.name);
+    struct RawCommand *raw_command = &job->first_process->raw_command;
+    int builtin =
+        raw_command->is_subshell ? -1 : is_builtin(raw_command->as_cmd.name);
+    CASH_DEBUG("builtin: %d\n", builtin);
+
     if (builtin != -1) {
-        int res = BUILTIN_FUNCS[builtin](vm, &raw_command);
-        free_raw_command(&raw_command);
-        return res;
+        int saved_in, saved_out, saved_err;
+        backup_fds(&saved_in, &saved_out, &saved_err);
+        setup_redirections(raw_command);
+        int res = BUILTIN_FUNCS[builtin](vm, raw_command);
+        restore_fds(saved_in, saved_out, saved_err);
+
+        vm->previous_exit_code = res % 0xFF;
+        return vm->previous_exit_code;
     }
-
-    if (strcmp(raw_command.args[0], "ls") == 0) {
-        char *color_arg = malloc((strlen("--color=auto") + 1) * sizeof(char));
-        CHECK_ALLOC(color_arg);
-        strcpy(color_arg, "--color=auto");
-
-        char **new_args = realloc(
-            raw_command.args, (raw_command.args_count + 2) * sizeof(char *));
-        CHECK_ALLOC(new_args);
-        new_args[raw_command.args_count] = color_arg;
-        new_args[raw_command.args_count + 1] = NULL;
-        raw_command.args_count++;
-        raw_command.args = new_args;
-    }
-
-    struct Process *process = malloc(sizeof(struct Process));
-    CHECK_ALLOC(process);
-    *process = (struct Process){
-        .next_process = NULL,
-        .raw_command = raw_command,
-        .completed = false,
-        .stopped = false,
-        .status = 0,
-        .pid = 0,
-    };
-    struct Job *job = malloc(sizeof(struct Job));
-    CHECK_ALLOC(job);
-    *job = (struct Job){
-        .next_job = NULL,
-        .first_process = process,
-        .command = strndup(expr->expr_text.string, expr->expr_text.length),
-        .notified = false,
-        .term_state = vm->shell_term_state,
-        .stderr = STDERR_FILENO,
-        .stdout = STDOUT_FILENO,
-        .stdin = STDIN_FILENO,
-        .pgid = 0};
 
     launch_job(vm, job, !expr->background);
 
-    vm->previous_exit_code = process->status % 0xFF;
+    CASH_DEBUG("oui\n");
+    if (!expr->background)
+        vm->previous_exit_code = job->first_process->status % 0xFF;
+    CASH_DEBUG("vm->previous_exit_code: %d\n", vm->previous_exit_code);
     return vm->previous_exit_code;
 }
 
-static int exec_expression(struct Vm *vm, struct Expr *expr) {
+static int exec_expression(struct Vm *vm, struct Expr *expr,
+                           struct Job **jobp) {
     switch (expr->type) {
         case EXPR_COMMAND:
-            return run_command(vm, expr);
-
-        case EXPR_SUBSHELL:
-            return run_subshell(vm, expr->subshell);
+            return run_command(vm, expr, jobp);
 
         case EXPR_NOT: {
-            if (exec_expression(vm, expr->binary.left) == 0) {
+            if (exec_expression(vm, expr->binary.left, jobp) == 0) {
                 vm->previous_exit_code = 1;
                 return 1;
             }
@@ -368,11 +447,11 @@ static int exec_expression(struct Vm *vm, struct Expr *expr) {
 
         case EXPR_AND:
         case EXPR_OR: {
-            const int left = exec_expression(vm, expr->binary.left);
+            const int left = exec_expression(vm, expr->binary.left, jobp);
             if ((left == 0 && expr->type == EXPR_AND) ||
                 (left != 0 && expr->type == EXPR_OR)) {
                 vm->previous_exit_code =
-                    exec_expression(vm, expr->binary.right);
+                    exec_expression(vm, expr->binary.right, jobp);
                 return vm->previous_exit_code;
             } else {
                 vm->previous_exit_code = left;
@@ -384,13 +463,16 @@ static int exec_expression(struct Vm *vm, struct Expr *expr) {
             struct Job *job = malloc(sizeof(struct Job));
             CHECK_ALLOC(job);
             int res = make_job(vm, expr, job);
+            *jobp = job;
             int i = 0;
             for (struct Process *process = job->first_process; process != NULL;
                  (process = process->next_process), ++i) {
                 struct RawCommand *raw_command = &process->raw_command;
-                CASH_DEBUG("Command %d:\n\tName: %s\n", i, raw_command->name);
-                for (int j = 0; j < raw_command->args_count; ++j) {
-                    CASH_DEBUG("\tArg %d: %s\n", j, raw_command->args[j]);
+                CASH_DEBUG("Command %d:\n\tName: %s\n", i,
+                           raw_command->as_cmd.name);
+                for (int j = 0; j < raw_command->as_cmd.args_count; ++j) {
+                    CASH_DEBUG("\tArg %d: %s\n", j,
+                               raw_command->as_cmd.args[j]);
                 }
             }
             CASH_DEBUG("res: %d\n", res);
@@ -415,22 +497,7 @@ static int exec_expression(struct Vm *vm, struct Expr *expr) {
     }
 }
 
-static int run_subshell(struct Vm *vm, struct Program *program) {
-    CASH_DEBUG(GREEN "Entering subshell\n" RESET);
-    const pid_t pid = fork();
-
-    if (pid == 0) {
-        int status = run_program(vm, program);
-        exit(status);
-    }
-
-    int status;
-    waitpid(pid, &status, 0);
-    CASH_DEBUG(GREEN "Exiting subshell\n" RESET);
-    return status;
-}
-
-static void make_process(struct Vm *vm, const struct Command *command,
+static void make_process(struct Vm *vm, struct Command *command,
                          struct Process *process) {
     struct RawCommand raw_command;
     get_final_command(vm, command, &raw_command);
@@ -445,33 +512,42 @@ static void make_process(struct Vm *vm, const struct Command *command,
     };
 }
 
-static int make_process_list(struct Vm *vm, const struct Expr *expr,
+static int make_process_list(struct Vm *vm, struct Expr *expr,
                              struct Process ***process_list) {
-    if (expr->binary.left->type == EXPR_PIPELINE) {
-        int res = make_process_list(vm, expr->binary.left, process_list);
-        if (res != 0)
-            return res;
-    } else {
-        assert(expr->binary.left->type == EXPR_COMMAND);
-        struct Process *new_process = malloc(sizeof(struct Process));
-        CHECK_ALLOC(new_process);
-        make_process(vm, &expr->binary.left->command, new_process);
-        **process_list = new_process;
-        *process_list = &new_process->next_process;
-    }
+    switch (expr->type) {
+        case EXPR_COMMAND: {
+            struct Process *new_process = malloc(sizeof(struct Process));
+            CHECK_ALLOC(new_process);
+            make_process(vm, &expr->command, new_process);
+            **process_list = new_process;
+            *process_list = &new_process->next_process;
+            return 0;
+        }
 
-    assert(expr->binary.right->type == EXPR_COMMAND);
-    struct Process *new_process = malloc(sizeof(struct Process));
-    CHECK_ALLOC(new_process);
-    make_process(vm, &expr->binary.right->command, new_process);
-    **process_list = new_process;
-    *process_list = &new_process->next_process;
-    return 0;
+        case EXPR_PIPELINE: {
+            int l = make_process_list(vm, expr->binary.left, process_list);
+            if (l != 0)
+                return l;
+            return make_process_list(vm, expr->binary.right, process_list);
+        }
+
+        default:
+            CASH_ERROR(EXIT_FAILURE,
+                       "(internal error) impossible expression type to "
+                       "make_process_list%s",
+                       "");
+            exit(EXIT_FAILURE);
+    }
 }
 
-static int make_job(struct Vm *vm, const struct Expr *expr, struct Job *jobp) {
+static int make_job(struct Vm *vm, struct Expr *expr, struct Job *jobp) {
+    CASH_DEBUG(RED "expr: ");
+    CASH_DEBUG_EXPR(print_expr(expr, 0));
+    CASH_DEBUG(RESET "\n has   expr_text: %.*s\n", expr->expr_text.length,
+               expr->expr_text.string);
     struct Job job = {
         .first_process = NULL,
+        .next_job = NULL,
         .command = strndup(expr->expr_text.string, expr->expr_text.length),
         .pgid = 0,
         .notified = false,
@@ -604,21 +680,21 @@ static void update_prompt(struct Vm *vm) {
 }
 
 static int change_dir(struct Vm *vm, const struct RawCommand *command) {
-    if (command->args_count > 2) {
+    if (command->as_cmd.args_count > 2) {
         CASH_ERROR(EXIT_FAILURE,
                    "cd: too many arguments (one expected, got %d)\n",
-                   command->args_count - 1);
+                   command->as_cmd.args_count - 1);
         return EXIT_FAILURE;
     }
     int result = 0;
 
     char *old_pwd = vm->old_pwd;
     vm->old_pwd = vm->pwd;
-    if (command->args_count == 1) {
+    if (command->as_cmd.args_count == 1) {
         result = chdir(vm->userpw->pw_dir);
         vm->pwd = strdup(vm->userpw->pw_dir);
     } else {
-        const char *arg = command->args[1];
+        const char *arg = command->as_cmd.args[1];
         if (strcmp(arg, "-") == 0) {
             result = chdir(old_pwd);
             vm->pwd = old_pwd;
@@ -643,7 +719,7 @@ static int change_dir(struct Vm *vm, const struct RawCommand *command) {
 
     if (result == -1) {
         CASH_PERROR(EXIT_FAILURE, "cd", "%s", "");
-        return 255;
+        return EXIT_FAILURE;
     }
 
     update_prompt(vm);
@@ -651,21 +727,21 @@ static int change_dir(struct Vm *vm, const struct RawCommand *command) {
 }
 
 static int exit_shell(struct Vm *vm, const struct RawCommand *raw_command) {
-    if (raw_command->args_count > 2) {
+    if (raw_command->as_cmd.args_count > 2) {
         CASH_ERROR(EXIT_FAILURE,
                    "exit: too many arguments (one expected, got %d)\n",
-                   raw_command->args_count - 1);
+                   raw_command->as_cmd.args_count - 1);
         return EXIT_FAILURE;
     }
 
-    if (raw_command->args_count == 1) {
+    if (raw_command->as_cmd.args_count == 1) {
         vm->previous_exit_code = 0;
     } else {
         char *endptr;
-        long exit_code = strtol(raw_command->args[1], &endptr, 10);
+        long exit_code = strtol(raw_command->as_cmd.args[1], &endptr, 10);
         if (*endptr != '\0' || exit_code < 0 || exit_code > 255) {
             CASH_ERROR(EXIT_FAILURE, "exit: invalid exit code `%s`\n",
-                       raw_command->args[1]);
+                       raw_command->as_cmd.args[1]);
             return EXIT_FAILURE;
         }
         vm->previous_exit_code = (int)exit_code;

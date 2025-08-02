@@ -4,6 +4,16 @@
 #include <cash/string.h>
 #include <stdbool.h>
 
+struct Program {
+    struct Stmt* statements;
+    int statement_count;
+    int statement_capacity;
+
+    const char* text;
+    int text_length;
+};
+struct Program make_program(void);
+
 enum RedirectionType {
     REDIRECT_IN,
     REDIRECT_OUT,
@@ -31,16 +41,22 @@ void add_argument(struct ArgumentList* list, struct ShellString arg);
 void free_arg_list(const struct ArgumentList* list);
 
 struct Command {
-    struct ShellString command_name;
-    struct ArgumentList arguments;
-
     struct Redirection* redirections;
     int redirection_count;
     int redirection_capacity;
+
+    union {
+        struct {
+            struct ShellString command_name;
+            struct ArgumentList arguments;
+        } as_cmd;
+        struct Program as_subshell;
+    };
+
+    bool is_subshell;
 };
 
 enum ExprType {
-    EXPR_SUBSHELL,
     EXPR_PIPELINE,
     EXPR_NOT,
     EXPR_AND,
@@ -54,8 +70,7 @@ struct Expr {
     struct StringView expr_text;
     bool background;
     union {
-        struct Program* subshell;  // EXPR_SUBSHELL
-        struct Command command;    // EXPR_COMMAND
+        struct Command command;  // EXPR_COMMAND
         struct {
             struct Expr* left;
             struct Expr* right;
@@ -69,12 +84,6 @@ struct Stmt {
 };
 void free_stmt(const struct Stmt* stmt);
 
-struct Program {
-    struct Stmt* statements;
-    int statement_count;
-    int statement_capacity;
-};
-struct Program make_program(void);
 void add_statement(struct Program* program, struct Stmt stmt);
 void free_program(const struct Program* program);
 
@@ -82,7 +91,7 @@ void free_program(const struct Program* program);
 void print_program(const struct Program* program, int indent);
 void print_statement(const struct Stmt* stmt, int indent);
 void print_expr(const struct Expr* expr, int indent);
-void print_command(const struct Command* command);
+void print_command(const struct Command* command, int indent);
 void print_redirection(const struct Redirection* redirection);
 #endif
 

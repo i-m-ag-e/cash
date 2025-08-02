@@ -13,7 +13,7 @@
 #include <string.h>
 #include <unistd.h>
 extern char **environ;
-extern bool repl_mode;
+extern bool is_repl_mode;
 
 const struct passwd *get_pw(void) {
     const struct passwd *pw = getpwuid(getuid());
@@ -37,11 +37,12 @@ char *get_cwd(void) {
 
 char *make_new_prompt(const char *username) {
     char *cwd = get_cwd();
-    const size_t size_needed =
-        strlen(username) + strlen(cwd) + COLOR_ATTR_LEN * 4 + COLOR_LEN * 2 + 3;
+    const size_t size_needed = strlen(username) + strlen(cwd) +
+                               COLOR_ATTR_LEN * 4 + COLOR_LEN * 2 +
+                               3 /* ':$ ' */ + 6 /* (cash) */;
     char *buf = malloc(size_needed * sizeof(char));
-    sprintf(buf, BOLD GREEN "%s" RESET ":" BOLD BLUE "%s" RESET "$ ", username,
-            cwd);
+    sprintf(buf, BOLD GREEN "(cash)%s" RESET ":" BOLD BLUE "%s" RESET "$ ",
+            username, cwd);
 
     free(cwd);
     return buf;
@@ -154,7 +155,7 @@ char *read_file(const char *path) {
 }
 
 void run_string(const char *text, int argc, char **argv) {
-    struct Vm vm = make_vm(argc, argv);
+    struct Vm vm = make_vm(argc, argv, false, false);
     struct Parser parser = parser_new(text, false);
     parse_program(&parser);
     const struct Program prog = parser.program;

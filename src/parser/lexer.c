@@ -11,7 +11,7 @@
 #include "cash/ast.h"
 #include "cash/memory.h"
 
-extern bool repl_mode;
+extern bool is_repl_mode;
 
 static char peek(const struct Lexer* lexer);
 static char peek_next(const struct Lexer* lexer);

@@ -7,7 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-extern bool repl_mode;
+extern bool is_repl_mode;
 
 static void add_component(struct ShellString *str,
                           struct StringComponent comp) {

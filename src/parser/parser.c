@@ -9,6 +9,7 @@
 #include "cash/ast.h"
 #include "cash/error.h"
 #include "cash/memory.h"
+#include "cash/util.h"
 
 #define ALLOC_CHECKED(ptr, size)                                          \
     do {                                                                  \
@@ -27,7 +28,7 @@
         }                 \
     } while (0)
 
-extern bool repl_mode;
+extern bool is_repl_mode;
 
 static struct Parser make_subparser(const struct Parser* parser);
 
@@ -39,7 +40,7 @@ static struct Token advance(struct Parser* parser);
 static bool match(struct Parser* parser, enum TokenType type);
 static struct Token consume(enum TokenType type, struct Parser* parser);
 
-static bool parse_subshell(struct Parser* parser, struct Expr* expr);
+static bool parse_subshell(struct Parser* parser, struct Program* program);
 static bool parse_terminal(struct Parser* parser, struct Expr* expr);
 static bool parse_not_expr(struct Parser* parser, struct Expr* expr);
 static bool parse_pipeline(struct Parser* parser, struct Expr* expr);
@@ -110,6 +111,28 @@ static bool skip_line_terminator(struct Parser* parser) {
     return !parser->error;
 }
 
+#define ASSERT_NON_EMPTY_COMMAND(expr, msg)                                 \
+    do {                                                                    \
+        if ((expr)->type == EXPR_COMMAND && !(expr)->command.is_subshell && \
+            (expr)->command.as_cmd.command_name.component_count == 0 &&     \
+            (expr)->command.redirection_count == 0) {                       \
+            parser->error = true;                                           \
+            CASH_ERROR(EXIT_FAILURE, msg "%s", "");                         \
+            return false;                                                   \
+        }                                                                   \
+    } while (0)
+
+#define ASSERT_NON_EMPTY_COMMAND_BY_CONSUME(expr, parser, tok_type)         \
+    do {                                                                    \
+        if ((expr)->type == EXPR_COMMAND && !(expr)->command.is_subshell && \
+            (expr)->command.as_cmd.command_name.component_count == 0 &&     \
+            (expr)->command.redirection_count == 0) {                       \
+            parser->error = true;                                           \
+            consume(tok_type, parser);                                      \
+            return false;                                                   \
+        }                                                                   \
+    } while (0)
+
 static bool parse_expr(struct Parser* parser, struct Expr* expr) {
     struct Expr left_expr;
     struct Expr *left, *right;
@@ -117,6 +140,8 @@ static bool parse_expr(struct Parser* parser, struct Expr* expr) {
     const char* end;
 
     CHECK(parse_not_expr(parser, &left_expr));
+    begin = left_expr.expr_text.string;
+
     if (match(parser, TOKEN_AMP)) {
         left_expr.background = true;
         *expr = left_expr;
@@ -125,14 +150,7 @@ static bool parse_expr(struct Parser* parser, struct Expr* expr) {
 
     while (peek_tt(parser) == TOKEN_AND || peek_tt(parser) == TOKEN_OR) {
         const struct Token tok = advance(parser);
-        if (left_expr.type == EXPR_COMMAND &&
-            left_expr.command.command_name.component_count == 0 &&
-            left_expr.command.redirection_count == 0) {
-            // error
-            parser->error = true;
-            CASH_ERROR(EXIT_FAILURE, "empty command in AND/OR list\n%s", "");
-            return false;
-        }
+        ASSERT_NON_EMPTY_COMMAND(&left_expr, "empty command in AND/OR list\n");
 
         if (begin == NULL)
             begin = tok.lexeme;
@@ -142,14 +160,7 @@ static bool parse_expr(struct Parser* parser, struct Expr* expr) {
         CHECK(parse_not_expr(parser, right));
         end = right->expr_text.string + right->expr_text.length;
 
-        if (right->type == EXPR_COMMAND &&
-            right->command.command_name.component_count == 0 &&
-            right->command.redirection_count == 0) {
-            // error
-            parser->error = true;
-            CASH_ERROR(EXIT_FAILURE, "empty command in AND/OR list\n%s", "");
-            return false;
-        }
+        ASSERT_NON_EMPTY_COMMAND(right, "empty command in AND/OR list\n");
 
         *left = left_expr;
         left_expr =
@@ -159,7 +170,25 @@ static bool parse_expr(struct Parser* parser, struct Expr* expr) {
                           .background = false};
     }
 
-    left_expr.background = match(parser, TOKEN_AMP);
+    if (match(parser, TOKEN_AMP) &&
+        (left_expr.type == EXPR_AND || left_expr.type == EXPR_OR)) {
+        struct Stmt stmt = {left_expr};
+        struct Program subshell = make_program();
+        subshell.text = left_expr.expr_text.string;
+        subshell.text_length = left_expr.expr_text.length;
+        add_statement(&subshell, stmt);
+
+        left_expr = (struct Expr){.type = EXPR_COMMAND,
+                                  .expr_text = left_expr.expr_text,
+                                  .background = true,
+                                  .command = (struct Command){
+                                      .is_subshell = true,
+                                      .as_subshell = subshell,
+                                      .redirections = NULL,
+                                      .redirection_count = 0,
+                                      .redirection_capacity = 0,
+                                  }};
+    }
     *expr = left_expr;
     return true;
 }
@@ -171,12 +200,7 @@ static bool parse_not_expr(struct Parser* parser, struct Expr* expr) {
 
     CHECK(parse_pipeline(parser, &sub_expr));
     if (is_not_expr) {
-        if (sub_expr.type == EXPR_COMMAND &&
-            sub_expr.command.command_name.component_count == 0 &&
-            sub_expr.command.redirection_count == 0) {
-            // error
-            consume(TOKEN_WORD, parser);
-        }
+        ASSERT_NON_EMPTY_COMMAND_BY_CONSUME(&sub_expr, parser, TOKEN_WORD);
 
         struct Expr* not_expr;
         ALLOC_CHECKED(not_expr, sizeof(struct Expr));
@@ -200,32 +224,19 @@ static bool parse_pipeline(struct Parser* parser, struct Expr* expr) {
     CHECK(parse_terminal(parser, &left_expr));
 
     while (match(parser, TOKEN_PIPE)) {
-        if (left_expr.type == EXPR_COMMAND &&
-            left_expr.command.command_name.component_count == 0 &&
-            left_expr.command.redirection_count == 0) {
-            // error
-            parser->error = true;
-            CASH_ERROR(EXIT_FAILURE, "empty command in pipeline\n%s", "");
-            return false;
-        }
-
         struct Expr *left, *right;
         ALLOC_CHECKED(left, sizeof(struct Expr));
+        *left = left_expr;
+
+        ASSERT_NON_EMPTY_COMMAND(left, "empty command in pipeline\n");
+
         ALLOC_CHECKED(right, sizeof(struct Expr));
 
         CHECK(parse_terminal(parser, right));
         end = right->expr_text.string + right->expr_text.length;
 
-        if (right->type == EXPR_COMMAND &&
-            right->command.command_name.component_count == 0 &&
-            right->command.redirection_count == 0) {
-            // error
-            parser->error = true;
-            CASH_ERROR(EXIT_FAILURE, "empty command in pipeline\n%s", "");
-            return false;
-        }
+        ASSERT_NON_EMPTY_COMMAND(right, "empty command in pipeline\n");
 
-        *left = left_expr;
         left_expr = (struct Expr){.type = EXPR_PIPELINE,
                                   .binary = {.left = left, .right = right},
                                   .expr_text = {begin, end - begin},
@@ -237,19 +248,12 @@ static bool parse_pipeline(struct Parser* parser, struct Expr* expr) {
 }
 
 static bool parse_terminal(struct Parser* parser, struct Expr* expr) {
-    if (peek_tt(parser) == TOKEN_LPAREN) {
-        return parse_subshell(parser, expr);
-    }
     return parse_command(parser, expr);
 }
 
-static bool parse_subshell(struct Parser* parser, struct Expr* expr) {
-    const char* begin = peek(parser).lexeme;
-    const char* end;
-
-    advance(parser);
+static bool parse_subshell(struct Parser* parser, struct Program* program) {
+    const char* begin = advance(parser).lexeme;
     struct Parser subparser = make_subparser(parser);
-    struct Program* subshell;
 
     if (!parse_program(&subparser)) {
         parser->error = true;
@@ -258,32 +262,43 @@ static bool parse_subshell(struct Parser* parser, struct Expr* expr) {
 
     parser->current_token = subparser.current_token;
     parser->next_token = subparser.next_token;
-    struct Token rparen = consume(TOKEN_RPAREN, parser);  // consume ')'
-    end = rparen.lexeme + rparen.lexeme_length;
+
+    const struct Token rparen = consume(TOKEN_RPAREN, parser);
+    const char* end = rparen.lexeme + rparen.lexeme_length;
 
     if (parser->error)
         return false;
 
-    ALLOC_CHECKED(subshell, sizeof(struct Program));
-    *subshell = subparser.program;
-    *expr = (struct Expr){.type = EXPR_SUBSHELL,
-                          .subshell = subshell,
-                          .background = false,
-                          .expr_text = {begin, end - begin}};
+    *program = subparser.program;
+    program->text = begin;
+    program->text_length = end - begin;
     return true;
 }
 
 static bool parse_command(struct Parser* parser, struct Expr* expr) {
-    struct Command command = {.command_name = {.components = NULL,
-                                               .component_count = 0,
-                                               .component_capacity = 0},
-                              .arguments = make_arg_list(),
+    struct Command command = {.is_subshell = false,
                               .redirection_capacity = 0,
                               .redirection_count = 0,
                               .redirections = NULL};
     bool break_out = false;
     const char* begin = peek(parser).lexeme;
-    const char* end;
+    const char* end = NULL;
+
+    if (peek_tt(parser) == TOKEN_LPAREN) {
+        command.is_subshell = true;
+        struct Program program;
+        if (!parse_subshell(parser, &program)) {
+            parser->error = true;
+            return false;
+        }
+        command.as_subshell = program;
+        begin = program.text;
+        end = program.text + program.text_length;
+    } else {
+        command.as_cmd.command_name = (struct ShellString){
+            .components = NULL, .component_count = 0, .component_capacity = 0};
+        command.as_cmd.arguments = make_arg_list();
+    }
 
     while (!is_at_end(parser) && !break_out) {
         if (parser->error)
@@ -292,15 +307,23 @@ static bool parse_command(struct Parser* parser, struct Expr* expr) {
         const struct Token next = peek(parser);
         switch (next.type) {
             case TOKEN_WORD: {
+                if (command.is_subshell) {
+                    CASH_ERROR(EXIT_FAILURE, "unexpected token `%.*s`",
+                               next.lexeme_length, next.lexeme);
+                    parser->error = true;
+                    return false;
+                }
                 end = next.lexeme + next.lexeme_length;
-                if (command.command_name.component_count == 0) {
-                    command.command_name = advance(parser).value.word;
+                if (command.as_cmd.command_name.component_count == 0) {
+                    command.as_cmd.command_name = advance(parser).value.word;
                 } else {
                     const struct Token argument = advance(parser);
-                    add_argument(&command.arguments, argument.value.word);
+                    add_argument(&command.as_cmd.arguments,
+                                 argument.value.word);
                 }
                 break;
             }
+
             case TOKEN_RPAREN:
                 if (parser->is_subparser)
                     break_out = true;
@@ -323,7 +346,8 @@ static bool parse_command(struct Parser* parser, struct Expr* expr) {
                 parser->error = true;
                 return false;
             default:
-                CASH_ERROR(EXIT_FAILURE, "IMPOSSIBLE%s", "");
+                CASH_ERROR(EXIT_FAILURE, "unexpected token `%.*s`",
+                           next.lexeme_length, next.lexeme);
                 exit(EXIT_FAILURE);
         }
     }
@@ -331,10 +355,12 @@ static bool parse_command(struct Parser* parser, struct Expr* expr) {
     if (parser->error)
         return false;
 
-    *expr = (struct Expr){.type = EXPR_COMMAND,
-                          .command = command,
-                          .background = false,
-                          .expr_text = {begin, end - begin}};
+    *expr = (struct Expr){
+        .type = EXPR_COMMAND,
+        .command = command,
+        .background = false,
+        .expr_text = end == NULL ? (struct StringView){begin, 0}
+                                 : (struct StringView){begin, end - begin}};
     return true;
 }
 
@@ -367,7 +393,7 @@ static bool parse_statement(struct Parser* parser, struct Stmt* stmt) {
     *stmt = (struct Stmt){.expr = expr};
 
     if (stmt->expr.type == EXPR_COMMAND &&
-        stmt->expr.command.command_name.component_count == 0 &&
+        stmt->expr.command.as_cmd.command_name.component_count == 0 &&
         stmt->expr.command.redirection_count == 0) {
         bool skipped = skip_line_terminator(parser);
         if (!is_at_end(parser)) {

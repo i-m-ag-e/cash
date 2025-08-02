@@ -22,7 +22,7 @@ static const char *kIndents[] = {
 };
 #endif
 
-extern bool repl_mode;
+extern bool is_repl_mode;
 
 struct ArgumentList make_arg_list(void) {
     return (struct ArgumentList){
@@ -43,12 +43,12 @@ void free_arg_list(const struct ArgumentList *list) {
 void free_expr(const struct Expr *expr) {
     switch (expr->type) {
         case EXPR_COMMAND:
-            free_shell_string(&expr->command.command_name);
-            free_arg_list(&expr->command.arguments);
-            break;
-
-        case EXPR_SUBSHELL:
-            free_program(expr->subshell);
+            if (expr->command.is_subshell) {
+                free_program(&expr->command.as_subshell);
+            } else {
+                free_shell_string(&expr->command.as_cmd.command_name);
+                free_arg_list(&expr->command.as_cmd.arguments);
+            }
             break;
 
         case EXPR_PIPELINE:
@@ -130,12 +130,6 @@ void print_expr(const struct Expr *expr, int indent) {
     if (expr->background)
         fprintf(stderr, BOLD YELLOW "(background)" RESET);
     switch (expr->type) {
-        case EXPR_SUBSHELL:
-            fprintf(stderr, "Subshell( ");
-            print_program(expr->subshell, indent + 1);
-            fprintf(stderr, " )");
-            break;
-
         case EXPR_PIPELINE:
         case EXPR_AND:
         case EXPR_OR:
@@ -157,7 +151,7 @@ void print_expr(const struct Expr *expr, int indent) {
             break;
 
         case EXPR_COMMAND:
-            print_command(&expr->command);
+            print_command(&expr->command, indent + 1);
             break;
     }
 }
@@ -168,14 +162,22 @@ void print_statement(const struct Stmt *stmt, int indent) {
     fprintf(stderr, " )");
 }
 
-void print_command(const struct Command *command) {
-    fprintf(stderr, "Command(<args: %d> " BOLD CYAN,
-            command->arguments.argument_count);
-    print_string(&command->command_name);
-    fprintf(stderr, "%s" RESET, command->arguments.argument_count ? " " : "");
-    for (int i = 0; i < command->arguments.argument_count; ++i) {
-        print_string(&command->arguments.arguments[i]);
-        fprintf(stderr, " ");
+void print_command(const struct Command *command, int indent) {
+    if (command->is_subshell) {
+        fprintf(stderr, "Subshell( ");
+        print_program(&command->as_subshell, indent + 1);
+        fprintf(stderr, " )");
+    } else {
+        fprintf(stderr, "Command(<args: %d> " BOLD CYAN,
+                command->as_cmd.arguments.argument_count);
+        print_string(&command->as_cmd.command_name);
+        fprintf(stderr, "%s" RESET,
+                command->as_cmd.arguments.argument_count ? " " : "");
+
+        for (int i = 0; i < command->as_cmd.arguments.argument_count; ++i) {
+            print_string(&command->as_cmd.arguments.arguments[i]);
+            fprintf(stderr, " ");
+        }
     }
 
     for (int i = 0; i < command->redirection_count; ++i) {
